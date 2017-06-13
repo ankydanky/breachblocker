@@ -1,0 +1,12 @@
+[Unit]
+Description=BreachBlocker Service
+After=multi-user.target
+
+[Service]
+Type=fork
+PIDFile=/var/run/breachblocker.pid
+ExecStart=/usr/bin/python /root/breachblocker/breachblocker.py
+ExecStop=/usr/bin/python /root/breachblocker/breachblocker.py --kill
+
+[Install]
+WantedBy=multi-user.target

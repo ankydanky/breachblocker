@@ -1,0 +1,47 @@
+#!/bin/sh
+
+# PROVIDE: breachblocker
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="breachblocker"
+prefix="bb"
+rcvar="breachblocker_enable"
+
+command="/usr/local/bin/python"
+pidfile="/var/run/breachblocker.pid"
+
+start_cmd="${prefix}_start"
+stop_cmd="${prefix}_stop"
+restart_cmd="${prefix}_restart"
+status_cmd="${prefix}_status"
+
+bb_start() {
+   echo "Breachblocker starting..."
+   $command /root/breachblocker/breachblocker.py
+}
+
+bb_stop() {
+   $command /root/breachblocker/breachblocker.py --kill
+}
+
+bb_restart() {
+   stop
+   start
+}
+
+bb_status() {
+    if [ ! -e $pidfile ]; then
+        echo "PID file seems to not exist. Something wrong or not started?"
+    else
+        pid=`cat $pidfile`
+        echo "Breachblocker is running... PID $pid"
+    fi
+}
+
+load_rc_config $name
+run_rc_command "$1"
+
+# eof
