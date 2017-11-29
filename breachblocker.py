@@ -465,9 +465,11 @@ class BreachBlocker:
                     self._blk_reason['ssh'].append(ip)
         
         if self.mail_svr_data and self.scan_mail:
-            mail_comm = "cat %s | grep -i -E \"(imap|pop3)\" | grep -E -v \"user=<>\" | grep -i -E \"%s\" | tail -n %s" % (
-                self.mail_svr_data['log'], self.mail_svr_data['log_pattern'], line_numbers
-            )
+            mail_comm = "cat %s | " % self.mail_svr_data['log']
+            mail_comm += "grep -i -E \"(imap|pop3)\" | "
+            mail_comm += "grep -E -v \"user=<>\" | "
+            mail_comm += "grep -i -E \"%s\" | " % self.mail_svr_data['log_pattern']
+            mail_comm += "tail -n %s" % line_numbers
             proc = subprocess.Popen(mail_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
@@ -483,9 +485,11 @@ class BreachBlocker:
                     self._blk_reason['mail'].append(ip[1])
         
         if self.smtp_svr_data and self.scan_smtp:
-            smtp_comm = "cat %s | grep -i -E \"(smtp|sasl)\" | grep -i -E \"%s\" | tail -n %s" % (
-                self.smtp_svr_data['log'], self.smtp_svr_data['log_pattern'], line_numbers
-            )
+            smtp_comm = "cat %s | " % self.smtp_svr_data['log']
+            smtp_comm += "grep -i -E \"(smtp|sasl)\" | "
+            smtp_comm += "grep -i -E -v \"Connection lost\" | "
+            smtp_comm += "grep -i -E \"%s\" | " % self.smtp_svr_data['log_pattern']
+            smtp_comm += "tail -n %s" % line_numbers
             proc = subprocess.Popen(smtp_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
