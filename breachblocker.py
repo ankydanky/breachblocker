@@ -41,6 +41,10 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 CHANGELOG:
 -----------
 
+2.0.4:
+
+* fixed: dovecot "user=<>" was counted as attack
+
 2.0.3:
 * added: lower log timeout to block timeout if latter is lower
 
@@ -60,8 +64,8 @@ CHANGELOG:
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.0.3"
-__modified__ = "2017-06-12"
+__version__ = "2.0.4"
+__modified__ = "2017-11-29"
 
 """---------------------------
 check python version before running
@@ -461,7 +465,7 @@ class BreachBlocker:
                     self._blk_reason['ssh'].append(ip)
         
         if self.mail_svr_data and self.scan_mail:
-            mail_comm = "cat %s | grep -i -E \"(imap|pop3)\" | grep -i -E \"%s\" | tail -n %s" % (
+            mail_comm = "cat %s | grep -i -E \"(imap|pop3)\" | grep -E -v \"user=<>\" | grep -i -E \"%s\" | tail -n %s" % (
                 self.mail_svr_data['log'], self.mail_svr_data['log_pattern'], line_numbers
             )
             proc = subprocess.Popen(mail_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
