@@ -41,6 +41,10 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 CHANGELOG:
 -----------
 
+2.0.5:
+
+* fixed: problem with pure-ftpd server
+
 2.0.4:
 
 * fixed: dovecot "user=<>" was counted as attack
@@ -64,8 +68,8 @@ CHANGELOG:
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.0.4"
-__modified__ = "2017-11-29"
+__version__ = "2.0.5"
+__modified__ = "2017-12-14"
 
 """---------------------------
 check python version before running
@@ -523,13 +527,12 @@ class BreachBlocker:
                     match = match.group()
                     if self.ftp_svr == "proftpd":
                         ip = re.sub("(::ffff:|\[|\])", "", match)
-                        ip_list.append(ip)
                     elif self.ftp_svr == "vsftpd":
                         ip = match.rstrip().split("=")
                         ip = ip[1]
-                        ip_list.append(ip)
                     elif self.ftp_svr == "pure-ftpd":
                         ip = re.sub("\?@", "", match)
+                    ip_list.append(ip)
                     self._blk_reason['ftp'].append(ip)
         
         if self.http_svr_data and self.scan_http:
