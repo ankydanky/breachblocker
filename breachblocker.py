@@ -1,10 +1,11 @@
 #! /usr/bin/env python
 # encoding: utf-8
 
+from __future__ import unicode_literals, print_function, division
+
 import os
 import sys
 import re
-import ConfigParser
 import socket
 import syslog
 import sqlite3
@@ -14,6 +15,13 @@ import time
 import subprocess
 import signal
 import traceback
+import argparse
+import getpass
+
+try:
+    import ConfigParser
+except ImportError as e:
+    import configparser as ConfigParser
 
 """
 ==================================================
@@ -33,13 +41,19 @@ Copyright (C) Andy Kayl - All Rights Reserved
 
 Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 ==================================================
-"""
-
-"""
 
 -----------
 CHANGELOG:
 -----------
+
+2.1.0:
+
+* added: usage of argparse modul for parsing cli params
+* added: several cli command
+* added: temporary whitelist for removed ip addresses
+* removed: support for python 2.6
+* changed: major code changes
+* added: support for python 3
 
 2.0.5:
 
@@ -68,8 +82,8 @@ CHANGELOG:
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.0.5"
-__modified__ = "2017-12-14"
+__version__ = "2.1.0"
+__modified__ = "2018-08-28"
 
 """---------------------------
 check python version before running
@@ -77,9 +91,14 @@ check python version before running
     
 major = sys.version_info[0]
 minor = sys.version_info[1]
-if (major == 2 and minor < 6) or (major != 2):
-    self.printError("You need Python 2.6 to run this script")
+
+if (major < 3 and minor < 7):
+    print("You need Python 2.7+ to run this script")
     sys.exit(1)
+
+IS_PY3 = False
+if major == 3:
+    IS_PY3 = True
 
 """---------------------------
 import python 2.6 module
@@ -88,7 +107,7 @@ import python 2.6 module
 try:
     from collections import defaultdict
 except ImportError:
-    print "Python collections module is needed. Please install it"
+    print("Python collections module is needed. Please install it")
     sys.exit(1)
 
 """---------------------------
@@ -98,7 +117,7 @@ load mailer for simplified email sending
 try:
     import mailer
 except ImportError:
-    print "Python mailer module is needed. Please install it with: pip install mailer"
+    print("Python mailer module is needed. Please install it with: pip install mailer")
     sys.exit(1)
     
 """---------------------------
@@ -113,31 +132,228 @@ supported server list
 ---------------------------"""
 
 supp_servers = {
-    "rhel": ["apache", "dovecot", "uw-imapd", "openssh", "postfix", "proftpd", "pure-ftpd", "vsftpd"],
-    "freebsd": ["apache", "dovecot", "openssh", "postfix", "proftpd"]
+    "rhel": [
+        "apache", "dovecot", "uw-imapd", "openssh",
+        "postfix", "proftpd", "pure-ftpd", "vsftpd"
+    ],
+    "freebsd": [
+        "apache", "dovecot", "openssh", "postfix", "proftpd"
+    ]
 }
 
 """---------------------------
-breablocker main class
+add cli arguments
 ---------------------------"""
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--kill", help="Kill runniing process (only in daemon mode)", action="store_true")
+parser.add_argument("--single", help="Run this script once if daemon mode is set to yes", action="store_true")
+parser.add_argument("--daemon", help="Launch as background daemon", action="store_true")
+parser.add_argument("--remove", help="Specify an ip address to remove from firewall", metavar="IPv4-ADDR")
+parser.add_argument("--check", help="Specify an ip address to check in white-/blacklist/firewall", metavar="IPv4-ADDR")
+parser.add_argument(
+    "--whitelist",
+    help="Specify an ip address to whitelist temporary (minutes)",
+    nargs=2,
+    metavar=("MIN", "IPv4-ADDR")
+)
+parser.add_argument("--bl", help="List all blocked ip addresses", action="store_true")
+parser.add_argument("--wl", help="List all temporary whitelisted addresses", action="store_true")
+parser.add_argument("--flush", help="Clear all database/firewall adresses", action="store_true")
+parser.add_argument("--no-dryrun", help="Overwrite config setting for DRY-RUN", action="store_true")
 
-class BreachBlocker:
+
+class Firewall(object):
+    """ Firewall class: used for firewall interactions """
+
+    def __init__(self):
+        """ init firewall stuff """
+
+        self._ipfw_rulestable = 100
+        
+        self.iptables_version = None
+        self.firewall_type = config.get("global", "firewall")
+        self.firewall = self._detect()
     
-    """---------------------------------
-    init class variabel and config
-    ---------------------------------"""
+    def _detect(self):
+        """ detect firewall type and return it / store it inside class """
+
+        if self.firewall_type == "iptables":
+            self.firewall = "iptables"
+        elif self.firewall_type == "firwalld":
+            self.firewall = "firewalld"
+        elif self.firewall_type == "ipfw":
+            self.firewall = "ipfw"
+        else:
+            if os.path.isfile("/sbin/ipfw"):
+                self.firewall = "ipfw"
+            elif os.path.isfile("/usr/bin/firewall-cmd"):
+                self.firewall = "firewalld"
+            elif os.path.isfile("/sbin/iptables"):
+                self.firewall = "iptables"
+            else:
+                print("Could not determine firewall type. Please set it manually.")
+                sys.exit(1)
+        
+        if self.firewall == "iptables":
+            proc = subprocess.Popen("/sbin/iptables --version", shell=True, stdout=subprocess.PIPE)
+            proc.wait()
+            proc_out = proc.communicate()[0]
+            if IS_PY3:
+                proc_out = proc_out.decode()
+            (major, minor, bugfix) = proc_out.replace("v", "").strip().split(" ")[1].split(".")
+            self.iptables_version = "%d.%02d.%02d" % (int(major), int(minor), int(bugfix))
+    
+    def add(self, ip):
+        """ add the given ip to the system firewall rules """
+
+        if self.firewall == "firewalld":
+            proc = subprocess.Popen(
+                "/usr/bin/firewall-cmd --quiet --zone drop --add-source %s" % ip,
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+        
+        elif self.firewall == "ipfw":
+            proc = subprocess.Popen(
+                "/sbin/ipfw list | grep '00001 deny ip from table(%d)'" % self._ipfw_rulestable,
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+            stdout = proc.communicate()[0]
+            if stdout == "":
+                proc = subprocess.Popen(
+                    "/sbin/ipfw -q add 1 deny ip from 'table(%d)' to any" % self._ipfw_rulestable,
+                    shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                proc.wait()
+            proc = subprocess.Popen(
+                "/sbin/ipfw -q table %d add %s" % (self._ipfw_rulestable, ip),
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+        
+        else:
+            cmd = "/sbin/iptables -w -I INPUT -s %s -j DROP"
+            if self.iptables_version < "1.04.20":
+                cmd = "/sbin/iptables -I INPUT -s %s -j DROP"
+            proc = subprocess.Popen(cmd % ip, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc.wait()
+
+        return proc.returncode
+    
+    def getBlocked(self):
+        """ get all addresses blocked by the firewall """
+
+        fw_source_blocked = []
+
+        if self.firewall == "firewalld":
+            proc = subprocess.Popen(
+                "/usr/bin/firewall-cmd --zone drop --list-sources",
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+            blocked = proc.communicate()[0]
+            blocked = re.split("\s{1,}", blocked)
+            for entry in blocked:
+                if entry == "":
+                    continue
+                fw_source_blocked.append(entry)
+        
+        elif self.firewall == "ipfw":
+            proc = subprocess.Popen(
+                "/sbin/ipfw table %d list" % self._ipfw_rulestable,
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+            blocked = proc.communicate()[0].split("\n")
+            for entry in blocked:
+                if entry == "":
+                    continue
+                line = re.split("\s{1,}", entry)
+                host = line[0].replace("/32", "")
+                fw_source_blocked.append(host)
+        
+        else:
+            cmd = "/sbin/iptables -w -L INPUT -n | grep DROP"
+            if self.iptables_version < "1.04.20":
+                cmd = "/sbin/iptables -L INPUT -n | grep DROP"
+            blocked = os.popen(cmd).readlines()
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc.wait()
+            stdout = proc.communicate()[0]
+            if IS_PY3:
+                stdout = stdout.decode()
+            blocked = stdout.rstrip().split("\n")
+            for entry in blocked:
+                if entry == "":
+                    continue
+                line = re.split("\s{1,}", entry)
+                if len(line) < 5:
+                    continue
+                fw_source_blocked.append(line[3])
+        
+        return fw_source_blocked
+    
+    def remove(self, ip):
+        """ remove given ip address from the firewall rules """
+
+        if self.firewall == "firewalld":
+            proc = subprocess.Popen(
+                "/usr/bin/firewall-cmd --quiet --zone drop --remove-source %s" % ip,
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+        
+        elif self.firewall == "ipfw":
+            proc = subprocess.Popen(
+                "/sbin/ipfw table %d list | grep %s" % (self._ipfw_rulestable, ip),
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+            stdout, stderr = proc.communicate()
+            if stdout == "":
+                return
+            ip = re.split("\s+", stdout)[0]
+            proc = subprocess.Popen(
+                "/sbin/ipfw -q table %d delete %s" % (self._ipfw_rulestable, ip),
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+        
+        else:
+            cmd = "/sbin/iptables -w -D INPUT -s %s -j DROP"
+            if self.iptables_version < "1.04.20":
+                cmd = "/sbin/iptables -D INPUT -s %s -j DROP"
+            proc = subprocess.Popen(
+                cmd % ip,
+                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            proc.wait()
+        
+        return proc.returncode
+    
+    def check(self, ip):
+        fw_blocked = self.getBlocked()
+        if ip in fw_blocked:
+            return True
+        return False
+
+
+class BreachBlocker(object):
+    """ Breachblocker main class """
     
     def __init__(self):
+        """ Init breachblocker class, set config params, detect firewall and more """
         
-        self.dry_run = int(config.get("global", "dry_run"))
+        self.dry_run = dry_run
         self.pid_file = config.get("global", "pid_file")
         self.write_syslog = int(config.get("global", "write_syslog"))
         self.attempts = int(config.get("global", "attempts"))
         self.block_timeout = int(config.get("global", "block_timeout"))
-        self.firewall_type = config.get("global", "firewall")
         self.whitelist = config.get("global", "whitelist")
         self.blacklist = config.get("global", "blacklist")
+        self.dbfile = config.get("global", "db_file")
         
         self.scan_http = int(config.get("scan", "http"))
         self.scan_ssh = int(config.get("scan", "ssh"))
@@ -154,10 +370,11 @@ class BreachBlocker:
         self.send_email = int(config.get("email", "send"))
         self.email_from = config.get("email", "from")
         self.email_to = config.get("email", "recipient")
-        
-        self.firewall = None
+
+        self.firewall = Firewall().firewall
         self.mode = None
         self.rules = None
+
         self._blk_reason = {
             "ssh": [],
             "ftp": [],
@@ -167,24 +384,17 @@ class BreachBlocker:
             "blacklist": [],
         }
         self._fw_updated = False
-        self._ipfw_rulestable = 100
-        self._iptables_version = None
-    
-    """---------------------------------
-    print error and exit script
-    ---------------------------------"""
     
     def printError(self, string):
-        print "ERROR: %s" % string
+        """ Prints and logs error message """
+
+        print("ERROR: %s" % string)
         if self.write_syslog:
             syslog.syslog(syslog.LOG_ERR, string)
         sys.exit(1)
     
-    """---------------------------------
-    check for correct os version
-    ---------------------------------"""
-    
     def checkOS(self):
+        """ check for correct os version """
         
         rel_file = "/etc/redhat-release"
         
@@ -206,24 +416,23 @@ class BreachBlocker:
         elif found_freebsd:
             self.mode = "freebsd"
     
-    """---------------------------------
-    init SQLite database and fetch data
-    ---------------------------------"""
-    
     def initDB(self):
-        dbconn = sqlite3.connect(os.path.join(tempfile.gettempdir(), "breachblocker.db"))
+        """ init SQLite database and fetch data """
+
+        dbconn = sqlite3.connect(self.dbfile)
         dbcursor = dbconn.cursor()
+        dbcursor.execute("CREATE TABLE IF NOT EXISTS addresses (ip, date, reason)")
+        dbcursor.execute("CREATE TABLE IF NOT EXISTS whitelist (ip, date)")
         try:
-            dbcursor.execute("CREATE TABLE addresses (ip, date)")
-        except Exception, e:
+            dbcursor.execute("ALTER TABLE addresses ADD COLUMN reason")
+        except sqlite3.OperationalError as e:
             pass
+        dbconn.commit()
         dbconn.close()
     
-    """---------------------------------
-    load rules from directory
-    ---------------------------------"""
-    
     def loadRules(self):
+        """ load rules from directory """
+
         nosupp = "The specified server/rules (%s) is/are not supported on this OS."
         
         if self.http_svr not in supp_servers[self.mode]:
@@ -245,14 +454,13 @@ class BreachBlocker:
             "ssh": self._parseRule(self.mode, self.ssh_svr)
         }
     
-    """----------------------------------
-    parse the given rule and return dict
-    ----------------------------------"""
-    
     def _parseRule(self, osname, svrname):
+        """ parse the given rule and return dict """
+
         rulesdir = os.path.abspath(os.path.dirname(__file__))
         ruleconf = ConfigParser.ConfigParser()
         ruleconf.read(os.path.join(rulesdir, "rules", "%s_%s.conf" % (osname, svrname)))
+        
         return {
             "rc": re.split("\s{1,}|\n", ruleconf.get("rule", "rc")),
             "log": ruleconf.get("rule", "log"),
@@ -260,11 +468,9 @@ class BreachBlocker:
             "regex_host": ruleconf.get("rule", "regex_host"),
         }
     
-    """---------------------------------
-    test server binary
-    ---------------------------------"""
-    
     def testRC(self, ruletype):
+        """ test for existing server binary used in ruleset """
+
         conf = self.rules[ruletype]
         if conf["rc"] is None or conf['rc'] == "":
             return True
@@ -273,11 +479,9 @@ class BreachBlocker:
                 return True
         return False
     
-    """---------------------------------
-    check configured servers
-    ---------------------------------"""
-    
     def checkSoftware(self):
+        """ check for invalid defined servers """
+
         errormsg = ""
         
         websvr_found = False
@@ -346,49 +550,9 @@ class BreachBlocker:
                 "log_pattern": self.rules['ssh']['regex_fail'],
                 "ip_pattern": self.rules['ssh']['regex_host']
             }
-
-    """---------------------------------
-    check if script is called correctly
-    ---------------------------------"""
-    
-    def checkSyntax(self):
-        arglen = len(sys.argv)
-        if (arglen > 2 or
-                (arglen == 2 and
-                 "--kill" not in sys.argv and
-                 "--daemon" not in sys.argv and
-                 "--single" not in sys.argv)):
-            self.printError("This script does only take <--daemon|--kill--single> as argument.")
-    
-    """--------------------------------
-    detect used firewall system
-    --------------------------------"""
-    
-    def setFirewall(self):
-        if self.firewall_type == "iptables":
-            self.firewall = "iptables"
-        elif self.firewall_type == "firwalld":
-            self.firewall = "firewalld"
-        elif self.firewall_type == "ipfw":
-            self.firewall = "ipfw"
-        else:
-            if os.path.isfile("/sbin/ipfw"):
-                self.firewall = "ipfw"
-            elif os.path.isfile("/usr/bin/firewall-cmd"):
-                self.firewall = "firewalld"
-            else:
-                self.firewall = "iptables"
-        if self.firewall == "iptables":
-            proc = subprocess.Popen("/sbin/iptables --version", shell=True, stdout=subprocess.PIPE)
-            proc.wait()
-            (major, minor, bugfix) = proc.communicate()[0].replace("v", "").strip().split(" ")[1].split(".")
-            self._iptables_version = "%d.%02d.%02d" % (int(major), int(minor), int(bugfix))
-    
-    """---------------------------------
-    check if the log files do exist
-    ---------------------------------"""
     
     def checkLogfiles(self):
+        """ check if the specified log files do exist """
         
         if self.http_svr_data and self.scan_http:
             if not os.path.isfile(self.http_svr_data['log']):
@@ -410,34 +574,35 @@ class BreachBlocker:
             if not os.path.isfile(self.smtp_svr_data['log']):
                 self.printError("SMTP log file " + self.smtp_svr_data['log'] + " not found")
     
-    """---------------------------------
-    check log entry line timeout
-    ---------------------------------"""
-    
     def _checkLogTimeout(self, line):
+        """ check log entry line timeout """
+
         if line == "":
             return False
+
         now_in_secs = int(time.time())
         ignore_timeout = 3600
         block_timeout = config.get("global", "block_timeout") * 60
+
         if block_timeout < ignore_timeout:
             ignore_timeout = block_timeout
+        
         line_arr = re.split("\s{1,}", line)
         (month_name, day, time_) = line_arr[0:3]
         year = datetime.datetime.now().strftime("%Y")
+        
         timeout_date = datetime.datetime.strptime("%s %s %s %s" % (year, month_name, day, time_), "%Y %b %d %H:%M:%S")
         timeout_date_tuple = timeout_date.timetuple()
         timeout_in_sec = int(time.mktime(timeout_date_tuple))
+        
         if now_in_secs - timeout_in_sec <= ignore_timeout:
             return True
+        
         return False
     
-    """---------------------------------
-    scan files for intruders
-    ---------------------------------"""
-    
     def scan(self):
-        
+        """ do the hard work, scan files for intruders """
+
         sys.stdout.write("Scanning for IPs to block... ")
         
         now_in_secs = int(time.time())
@@ -573,26 +738,22 @@ class BreachBlocker:
                 try:
                     ip = socket.gethostbyname(ip)
                     self._blk_cause[key].append(ip)
-                except Exception, e:
+                except Exception as e:
                     pass
         
         sys.stdout.write("\033[32mdone.\033[0m\n")
     
-    """---------------------------------
-    get blacklist
-    ---------------------------------"""
-    
     def _getBlacklistAddresses(self):
+        """ get blacklisted ip addresses from config """
+
         if self.blacklist == "":
             return []
         blacklist = re.split("\s{1,}|\n", self.blacklist.lstrip().rstrip())
         return blacklist
     
-    """---------------------------------
-    check host in whitelist
-    ---------------------------------"""
-    
     def _checkWhitelist(self, host):
+        """ check if host is in config whitelist """
+
         if self.whitelist == "":
             return False
         whitelist = re.split("\s{1,}|\n", self.whitelist.lstrip().rstrip())
@@ -608,25 +769,36 @@ class BreachBlocker:
                 except Exception:
                     pass
             if ip_found:
-                print "%s found in whitelist... skipping..." % host
+                print("%s found in whitelist... skipping..." % host)
                 return True
         return False
     
-    """---------------------------------
-    find host address from host name/dns
-    ---------------------------------"""
+    def _checkDatabaseWhitelist(self, host):
+        """ check if host ip is in the temp whitelist db table """
+        try:
+            ip = socket.gethostbyname(host)
+        except socket.gaierror as e:
+            return False
+        qry = self.dbcursor.execute(
+            "SELECT ip FROM whitelist WHERE ip=? AND date>date('now')",
+            (ip,)
+        )
+        res_wl = qry.fetchall()
+        for row in res_wl:
+            if row[0] == ip:
+                return True
+        return False
     
     def _getHostAddress(self, host):
+        """ find host address from host name/dns """
         try:
             return socket.gethostbyname(host)
-        except Exception, e:
+        except Exception as e:
             return None
     
-    """---------------------------------
-    update firewall (violations)
-    ---------------------------------"""
-    
     def _updateDueToViolations(self):
+        """ update the firewall and add block entries to the database """
+
         sys.stdout.write("Updating firewall... ")
         sys.stdout.flush()
         
@@ -634,8 +806,9 @@ class BreachBlocker:
         ip_violations = {}
         
         for host in self._ips_to_block:
-            is_in_whitelist = self._checkWhitelist(host)
-            if not is_in_whitelist:
+            is_in_conf_wl = self._checkWhitelist(host)
+            is_in_db_wl = self._checkDatabaseWhitelist(host)
+            if not is_in_conf_wl and not is_in_db_wl:
                 ip = self._getHostAddress(host)
                 if ip is not None and ip not in self._fw_source_blocked:
                     new_ips.append(ip)
@@ -662,11 +835,12 @@ class BreachBlocker:
                 if self.dry_run:
                     continue
                 
-                ret = self._addToFirewall(ip)
-                
-                if ret == 0:
+                if Firewall().add(ip) == 0:
                     if ip not in self._getBlacklistAddresses():
-                        self.dbcursor.execute("INSERT INTO addresses (ip, date) VALUES (?, DATETIME('now', 'localtime'))", (ip,))
+                        self.dbcursor.execute(
+                            "INSERT INTO addresses (ip, date, reason) VALUES (?, DATETIME('now', 'localtime'), ?)",
+                            (ip, violations)
+                        )
                         self.dbconn.commit()
                     if self.write_syslog:
                         syslog.syslog(syslog.LOG_NOTICE, "IP "+ip+" was blocked due to "+violations+" violation")
@@ -677,141 +851,29 @@ class BreachBlocker:
         else:
             sys.stdout.write("\033[32mNo threats found.\033[0m\n")
     
-    """---------------------------------
-    get firewall input rules
-    ---------------------------------"""
-    
     def _getFirewallInputRules(self):
-        self._fw_source_blocked = []
-        if self.firewall == "firewalld":
-            proc = subprocess.Popen(
-                "/usr/bin/firewall-cmd --zone drop --list-sources",
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-            blocked = proc.communicate()[0]
-            blocked = re.split("\s{1,}", blocked)
-            for entry in blocked:
-                if entry == "":
-                    continue
-                self._fw_source_blocked.append(entry)
-        elif self.firewall == "ipfw":
-            proc = subprocess.Popen(
-                "/sbin/ipfw table %d list" % self._ipfw_rulestable,
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-            blocked = proc.communicate()[0].split("\n")
-            for entry in blocked:
-                if entry == "":
-                    continue
-                line = re.split("\s{1,}", entry)
-                host = line[0].replace("/32", "")
-                self._fw_source_blocked.append(host)
-        else:
-            cmd = "/sbin/iptables -w -L INPUT -n | grep DROP"
-            if self._iptables_version < "1.04.20":
-                cmd = "/sbin/iptables -L INPUT -n | grep DROP"
-            blocked = os.popen(cmd).readlines()
-            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-            stdout = proc.communicate()[0]
-            blocked = stdout.rstrip().split("\n")
-            for entry in blocked:
-                if entry == "":
-                    continue
-                line = re.split("\s{1,}", entry)
-                if len(line) < 5:
-                    continue
-                self._fw_source_blocked.append(line[3])
-    
-    """---------------------------------
-    add ip address to firewall
-    ---------------------------------"""
-    
-    def _addToFirewall(self, ip):
-        if self.firewall == "firewalld":
-            proc = subprocess.Popen(
-                "/usr/bin/firewall-cmd --quiet --zone drop --add-source %s" % ip,
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-        elif self.firewall == "ipfw":
-            proc = subprocess.Popen(
-                "/sbin/ipfw list | grep '00001 deny ip from table(%d)'" % self._ipfw_rulestable,
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-            stdout = proc.communicate()[0]
-            if stdout == "":
-                proc = subprocess.Popen(
-                    "/sbin/ipfw -q add 1 deny ip from 'table(%d)' to any" % self._ipfw_rulestable,
-                    shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                )
-                proc.wait()
-            proc = subprocess.Popen(
-                "/sbin/ipfw -q table %d add %s" % (self._ipfw_rulestable, ip),
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-        else:
-            cmd = "/sbin/iptables -w -I INPUT -s %s -j DROP"
-            if self._iptables_version < "1.04.20":
-                cmd = "/sbin/iptables -I INPUT -s %s -j DROP"
-            proc = subprocess.Popen(cmd % ip, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-        return proc.returncode
-    
-    """---------------------------------
-    remove ip from firewall
-    ---------------------------------"""
+        """ get all blocked ip addresses """
+        self._fw_source_blocked = Firewall().getBlocked()
     
     def _removeAddressFromFirewall(self, ip):
-        if self.firewall == "firewalld":
-            proc = subprocess.Popen(
-                "/usr/bin/firewall-cmd --quiet --zone drop --remove-source %s" % ip,
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-        elif self.firewall == "ipfw":
-            proc = subprocess.Popen(
-                "/sbin/ipfw table %d list | grep %s" % (self._ipfw_rulestable, ip),
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-            stdout, stderr = proc.communicate()
-            if stdout == "":
-                return
-            ip = re.split("\s+", stdout)[0]
-            proc = subprocess.Popen(
-                "/sbin/ipfw -q table %d delete %s" % (self._ipfw_rulestable, ip),
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-        else:
-            proc = subprocess.Popen(
-                "/sbin/iptables -w -D INPUT -s %s -j DROP" % ip,
-                shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc.wait()
-        if proc.returncode == 0 and self.write_syslog:
+        """ remove ip from firewall """
+        returncode = Firewall().remove(ip)
+        if returncode == 0 and self.write_syslog:
             syslog.syslog(
                 syslog.LOG_NOTICE,
                 "IP %s was removed due to block timeout (%s minutes)" % (ip, self.block_timeout)
             )
     
-    """---------------------------------
-    remove outdated/timed out addresses
-    ---------------------------------"""
-    
-    def _removeOutdated(self):
-        sys.stdout.write("Removing old ip addresses... ")
+    def _removeOutdatedBlocklist(self):
+        """ remove outdated/timed out addresses """
+
+        print("Removing old blocked ip addresses... ", end="")
         
         if self.block_timeout == 0:
-            sys.stdout.write("\033[33mdisabled.\033[0m\n")
+            print("\033[33mdisabled.\033[0m")
             return
         
-        r_count = 0;
+        r_count = 0
         unix_stamp = int(time.time()) - (self.block_timeout * 60)
         deadline = datetime.datetime.fromtimestamp(unix_stamp).strftime("%Y-%m-%d %H:%M:%S")
         
@@ -826,39 +888,47 @@ class BreachBlocker:
         if r_count > 0:
             if not self.dry_run:
                 self.dbconn.commit()
-            sys.stdout.write("\033[32m%d addresses removed.\033[0m\n" % r_count)
+            print("\033[32m%d addresses removed.\033[0m" % r_count)
         else:
-            sys.stdout.write("\033[32mdone.\033[0m\n")
+            print("\033[32mdone.\033[0m")
     
-    """---------------------------------
-    get stored addresses from database
-    ---------------------------------"""
+    def _removeOutdatedWhitelist(self):
+        """ remove timed out entries from whitelist """
+        date = time.strftime("%Y-%m-%d %H:%M:%S")
+        print("Removing old whitelisted ip addresses... ", end="")
+        self.dbcursor.execute("DELETE FROM whitelist WHERE date<?", (date,))
+        self.dbconn.commit()
+        print("\033[32mdone.\033[0m")
     
     def _getDatabaseData(self):
+        """ get blocked addresses from database """
         self.ip_rows = self.dbcursor.execute("SELECT ip, date FROM addresses").fetchall()
     
-    """---------------------------------
-    update firewall (wrapper function)
-    ---------------------------------"""
+    def clear(self):
+        """ cleanup database entries """
+        if self.dry_run:
+            return
+        self.dbcursor.execute("DELETE FROM addresses")
+        self.dbconn.commit()
     
     def updateFirewall(self):
+        """ update firewall (wrapper function) """
         self._fw_updated = False
         self._getDatabaseData()
         self._getFirewallInputRules()
-        self._removeOutdated()
+        self._removeOutdatedBlocklist()
+        self._removeOutdatedWhitelist()
         self._updateDueToViolations()
-        sys.stdout.write("\n")
+        print("")
         if self._fw_updated is True:
-            print "Firewall updated..."
-    
-    """---------------------------------
-    send notification email
-    ---------------------------------"""
+            print("Firewall updated...")
     
     def sendNotif(self):
+        """ send out mail """
+
         if not self._fw_updated or not self.send_email:
             return
-        print "Sending notification email..."
+        print("Sending notification email...")
         message = mailer.Message(
             From=self.email_from,
             To=re.split("\s{1,}|\n", self.email_to),
@@ -873,66 +943,250 @@ class BreachBlocker:
         except Exception:
             self.printError("Could not send email. Server problems?")
     
-    """---------------------------------
-    kill daemon
-    ---------------------------------"""
-    
     def kill(self):
+        """ kill the daemon """
         try:
             pid = open(self.pid_file, "r").read().strip()
             os.unlink(self.pid_file)
             os.kill(int(pid), 9)
-            print "Daemon killed (%s)..." % pid
+            print("Daemon killed (%s)..." % pid)
         except Exception as e:
-            print unicode(e)
-    
-    """---------------------------------
-    execute
-    ---------------------------------"""
+            print(str(e))
     
     def run(self):
-        self.checkSyntax()
+        """ run the script """
         self.checkOS()
         self.initDB()
         self.loadRules()
-        self.setFirewall()
         self.checkSoftware()
         self.checkLogfiles()
-        self.dbconn = sqlite3.connect(os.path.join(tempfile.gettempdir(), "breachblocker.db"))
+        self.dbconn = sqlite3.connect(self.dbfile)
         self.dbcursor = self.dbconn.cursor()
         self.scan()
         self.updateFirewall()
         self.sendNotif()
         self.dbconn.close()
             
+
+class BBCli(BreachBlocker):
+    """ CLI interface class for Breachblocker """
+
+    def __init__(self):
+        """ init cli interface """
+        BreachBlocker.__init__(self)
+        self.write_syslog = False
+        self.initDB()
+        self.dbconn = sqlite3.connect(self.dbfile)
+        self.dbcursor = self.dbconn.cursor()
+    
+    def __del__(self):
+        """ cleanup on del """
+        self.dbconn.close()
+    
+    def _checkIpFormat(self, ip):
+        """ test if given ip has the correct IPv4 format """
+        if re.search("^(\d{1,3}\.){3}\d{1,3}$", ip):
+            return True
+        print("Specified IP format is wrong.")
+        return False
+    
+    def _getHostAddress(self, host):
+        """ get ip address for hostname """
+        ip = host
+        try:
+            ip = socket.gethostbyname(host)
+        except socket.gaierror:
+            print("Could not resolve host address...")
+            sys.exit(1)
+        return ip
+    
+    def remove(self, ip):
+        """ remove the given ip from database and firewall """
+        if not self._checkIpFormat(ip):
+            sys.exit(1)
+        retcode = 0
+        print("Removing %s from firewall... " % ip, end="")
+        fw = Firewall()
+        fw_blocked = fw.getBlocked()
+        if ip not in fw_blocked:
+            print("\033[33mIP %s not in firewall.\033[0m" % ip)
+        else:
+            if not self.dry_run:
+                retcode = Firewall().remove(ip)
+        if retcode == 0:
+            print("\033[32mdone.\033[0m")
+        else:
+            print("\033[31merror.\033[0m")
+        print("Removing %s from database... " % ip, end="")
+        if not self.dry_run:
+            self.dbcursor.execute("DELETE FROM addresses WHERE ip=?", (ip,))
+            self.dbconn.commit()
+        print("\033[32mdone.\033[0m")
+        CliLogger.write("command remove executed by %s for %s" % (getpass.getuser(), ip))
+              
+    def flush(self):
+        """ flush all data (firewall, blocked hosts) """
+        self._getDatabaseData()
+        fw = Firewall()
+        for row in self.ip_rows:
+            sys.stdout.write("Removing %s from firewall... " % row[0])
+            if not self.dry_run:
+                retcode = fw.remove(row[0])
+                if retcode != 0:
+                    sys.stdout.write("error.\n")
+                    sys.stdout.flush()
+                    continue
+            sys.stdout.write("done.\n")
+            sys.stdout.flush()
+        self.clear()
+        sys.stdout.write("Firewall and blocklist cleared.\n")
+        sys.stdout.flush()
+        CliLogger.write("command flush executed by %s" % getpass.getuser())
+    
+    def wlist(self, minutes, host):
+        """ add an <ip> address for <minutes> to the whitelist dataabase """
+        ip = self._getHostAddress(host)
+        if not self._checkIpFormat(ip):
+            sys.exit(1)
+        minutes = int(minutes)
+        date_deadline = datetime.datetime.fromtimestamp(int(time.time()) + minutes * 60)
+        res_wl = self.dbcursor.execute("SELECT ip, date FROM whitelist WHERE ip=?", (ip,)).fetchall()
+        if len(res_wl) == 0:
+            self.dbcursor.execute("INSERT INTO whitelist (ip, date) VALUES (?, ?)", (ip, date_deadline))
+        else:
+            self.dbcursor.execute("UPDATE whitelist SET date=? WHERE ip=?", (date_deadline, ip,))
+        self.dbconn.commit()
+        print("IP %s was added until %s" % (ip, date_deadline))
+        CliLogger.write("command whitelist executed by %s for %s" % (getpass.getuser(), ip))
+    
+    def showAllWhitelist(self):
+        """ show all whitlisted ip addresses (from config and database) """
+        wl_conf = config.get("global", "whitelist")
+        wl_conf = re.split("\s{1,}", wl_conf)
+        
+        print("Config whitelist: ", end="")
+        if len(wl_conf) > 0:
+            print("")
+            for ip in wl_conf:
+                print("  %s" % ip)
+        else:
+            print("  \033[33mNone\033[0m")
+
+        res_wl = self.dbcursor.execute("SELECT DISTINCT ip, date FROM whitelist").fetchall()
+
+        print("Database whitelist: ", end="")
+        if len(res_wl) > 0:
+            print("")
+            for row in res_wl:
+                print("  %s (expires %s)" % (row[0], row[1]))
+        else:
+            print("  \033[33mNone\033[0m")
+    
+    def showBlocked(self):
+        print("Blocked by breachblocker: ", end="")
+        res_bl = self.dbcursor.execute("SELECT ip, reason FROM addresses ORDER BY ip ASC").fetchall()
+        if len(res_bl) == 0:
+            print("\033[33mNone.\033[0m")
+            return
+        print("")
+        for row in res_bl:
+            print("  %s (%s)" % (row[0], row[1]))
+    
+    def checkForHost(self, host):
+        ip = self._getHostAddress(host)
+        if host != ip:
+            print("Looking for %s (%s)..." % (host, ip))
+        else:
+            print("Looking for %s..." % ip)
+
+        qry_wl = self.dbcursor.execute("SELECT COUNT(ip) FROM whitelist WHERE ip=?", (ip,))
+        res_wl = qry_wl.fetchall()
+
+        qry_bl = self.dbcursor.execute("SELECT COUNT(ip) FROM addresses WHERE ip=?", (ip,))
+        res_bl = qry_bl.fetchall()
+
+        print("Database whitelist:")
+        if res_wl[0][0] == 0:
+            print("  \033[33mIP %s not found\033[0m" % ip)
+        else:
+            print("  \033[32mIP %s found\033[0m" % ip)
+        
+        print("Database blocklist:")
+        if res_bl[0][0] == 0:
+            print("  \033[33mIP %s not found\033[0m" % ip)
+        else:
+            print("  \033[32mIP %s found\033[0m" % ip)
+        
+        print("Firewall:")
+        if Firewall().check(ip):
+            print("  \033[32mIP %s found\033[0m" % ip)
+        else:
+            print("  \033[33mIP %s not found\033[0m" % ip)
+
+
+class CliLogger(object):
+    """ Looger class for cli commands """
+
+    @staticmethod
+    def write(text):
+        """ writes the given text to syslog """
+        syslog.openlog(str("Breachblocker-CLI"))
+        syslog.syslog(syslog.LOG_NOTICE, text)
+
+
 """---------------------------
 launch
 ---------------------------"""
 
 if __name__ == '__main__':
+    args = parser.parse_args()
 
-    if config.getint("global", "dry_run"):
-        print "\033[36mRunning in DRY-RUN. No changes will be done.\033[0m"
+    dry_run = config.getint("global", "dry_run")
+
+    if args.no_dryrun:
+        dry_run = False
+
+    if dry_run:
+        print("\033[36mRunning in DRY-RUN. No changes will be done.\033[0m")
 
     try:
-        if "--kill" in sys.argv:
+        
+        if args.kill:
+            BBCli().flush()
             BreachBlocker().kill()
             sys.exit(0)
-        elif (config.getint("global", "daemon") or "--daemon" in sys.argv) and "--single" not in sys.argv:
+        elif args.remove:
+            BBCli().remove(args.remove)
+        elif args.wl:
+            BBCli().showAllWhitelist()
+        elif args.bl:
+            BBCli().showBlocked()
+        elif args.check:
+            BBCli().checkForHost(args.check)
+        elif args.whitelist:
+            BBCli().wlist(args.whitelist[0], args.whitelist[1])
+        elif args.flush:
+            BBCli().flush()
+        
+        elif config.getint("global", "daemon") or (args.daemon and not args.single):
             pid_file = config.get("global", "pid_file")
             if os.path.isfile(pid_file):
                 BreachBlocker().printError("PID file exists. Is there already a process running?")
+            
             pid = os.fork()
             if pid > 0:
                 fh = open(pid_file, "w")
                 fh.write(str(pid))
                 fh.close()
                 sys.exit()
-            print "Daemon started..."
+            
+            print("Daemon started...")
+            
             sys.stdout = open(os.devnull, "a")
             if config.getint("global", "write_syslog"):
-                syslog.openlog("Breachblocker")
+                syslog.openlog(str("Breachblocker"))
                 syslog.syslog(syslog.LOG_NOTICE, "Starting scan for violations (daemon mode)...")
+            
             while True:
                 try:
                     script = BreachBlocker()
@@ -941,14 +1195,17 @@ if __name__ == '__main__':
                     time.sleep(20)
                 except Exception as e:
                     syslog.syslog(syslog.LOG_NOTICE, "Exception captured: %s. Continue..." % str(e))
+        
         else:
             if config.getint("global", "write_syslog"):
-                syslog.openlog("Breachblocker")
+                syslog.openlog(str("Breachblocker"))
                 syslog.syslog(syslog.LOG_NOTICE, "Starting scan for violations...")
             BreachBlocker().run()
+    
     except KeyboardInterrupt:
-        print "User cancelled script."
+        print("User cancelled script.")
         sys.exit(1)
+    
     except Exception as e:
         traceback.print_exc()
         try:
