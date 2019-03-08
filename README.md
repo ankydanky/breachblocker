@@ -2,7 +2,18 @@
 Breachblocker is a log scanner for intrusion attempts and ip blocker, similar to Fail2Ban. I created Breachblocker because 
 Fail2Ban was to complicated to setup correctly in my opinion.
 
-It can be used with CentOS 7+ and FreeBSD 10+ (IPTABLES / FirewallD / IPFW)
+It can be used with following OSes:
+* CentOS 6
+* CentOS 7
+* FreeBSD 10
+* FreeBSD 11
+* FreeBSD 12
+
+and following firewalls:
+
+* IPTABLES
+* FirewallD
+* IPFW
 
 The startup-scripts folder contains SystemD and BSD Init scripts so that it can be started at boot time. It can 
 run once (script) or as background-process (daemon)
