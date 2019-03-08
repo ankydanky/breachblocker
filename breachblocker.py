@@ -86,8 +86,8 @@ CHANGELOG:
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.1.0"
-__modified__ = "2018-08-28"
+__version__ = "2.2.0"
+__modified__ = "2019-03-08"
 
 """---------------------------
 check python version before running
