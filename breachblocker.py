@@ -46,6 +46,10 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 CHANGELOG:
 -----------
 
+2.2.0:
+
+* added FreeBSD 12 support
+
 2.1.0:
 
 * added: usage of argparse modul for parsing cli params
@@ -403,12 +407,12 @@ class BreachBlocker(object):
             file_content = open(rel_file).readline()
             found_centos = re.search("centos( linux)? release (6|7)", file_content, re.IGNORECASE)
         
-        found_freebsd = re.search("freebsd(10|11)", sys.platform, re.IGNORECASE)
+        found_freebsd = re.search("freebsd(10|11|12)", sys.platform, re.IGNORECASE)
         
         if not found_centos and not found_freebsd:
             self.printError(
                 "Operating System is invalid. " +
-                "This script runs only on RHEL/CentOS Linux version 6/7 or FreeBSD 10/11"
+                "This script runs only on RHEL/CentOS Linux version 6/7 or FreeBSD 10/11/12"
             )
         
         if found_centos:
