@@ -18,12 +18,13 @@ import traceback
 import argparse
 import getpass
 
+from collections import defaultdict
+
 try:
     import ConfigParser
 except ImportError as e:
     import configparser as ConfigParser
 
-from collections import defaultdict
 
 """
 ==================================================
@@ -423,12 +424,9 @@ class BreachBlocker(object):
         dbcursor = dbconn.cursor()
         dbcursor.execute("CREATE TABLE IF NOT EXISTS addresses (ip, date, reason)")
         dbcursor.execute("CREATE TABLE IF NOT EXISTS whitelist (ip, date)")
+        dbcursor.execute("CREATE TABLE IF NOT EXISTS history (ip, date)")
         try:
             dbcursor.execute("ALTER TABLE addresses ADD COLUMN reason")
-        except sqlite3.OperationalError as e:
-            pass
-        try:
-            dbcursor.execute("CREATE TABLE IF NOT EXISTS history (ip, date)")
         except sqlite3.OperationalError as e:
             pass
         dbconn.commit()
@@ -607,7 +605,7 @@ class BreachBlocker(object):
     def scan(self):
         """ do the hard work, scan files for intruders """
 
-        sys.stdout.write("Scanning for IPs to block... ")
+        print("Scanning for IPs to block... ", end="", flush=True)
         
         now_in_secs = int(time.time())
         line_numbers = 100
@@ -745,7 +743,7 @@ class BreachBlocker(object):
                 except Exception as e:
                     pass
         
-        sys.stdout.write("\033[32mdone.\033[0m\n")
+        print("\033[32mdone.\033[0m")
     
     def _getBlacklistAddresses(self):
         """ get blacklisted ip addresses from config """
@@ -851,7 +849,7 @@ class BreachBlocker(object):
                     self.printError("Sorry. error when updating firewall (violations)...")
             
         else:
-            sys.stdout.write("\033[32mNo threats found.\033[0m\n")
+            print("\033[32mNo threats found.\033[0m")
     
     def _getFirewallInputRules(self):
         """ get all blocked ip addresses """
@@ -1031,18 +1029,15 @@ class BBCli(BreachBlocker):
         self._getDatabaseData()
         fw = Firewall()
         for row in self.ip_rows:
-            sys.stdout.write("Removing %s from firewall... " % row[0])
+            print("Removing %s from firewall... " % row[0], end="", flush=True)
             if not self.dry_run:
                 retcode = fw.remove(row[0])
                 if retcode != 0:
-                    sys.stdout.write("error.\n")
-                    sys.stdout.flush()
+                    print("error.", flush=True)
                     continue
-            sys.stdout.write("done.\n")
-            sys.stdout.flush()
+            print("done.", flush=True)
         self.clear()
-        sys.stdout.write("Firewall and blocklist cleared.\n")
-        sys.stdout.flush()
+        print("Firewall and blocklist cleared.", flush=True)
         CliLogger.write("command flush executed by %s" % getpass.getuser())
     
     def wlist(self, minutes, host):
