@@ -23,6 +23,8 @@ try:
 except ImportError as e:
     import configparser as ConfigParser
 
+from collections import defaultdict
+
 """
 ==================================================
 **BREACHBLOCKER**
@@ -91,7 +93,7 @@ CHANGELOG:
 
 __author__ = "Andy Kayl"
 __version__ = "2.3.0"
-__modified__ = "2019-03-08"
+__modified__ = "2019-05-03"
 
 """---------------------------
 check python version before running
@@ -107,16 +109,6 @@ if (major < 3 and minor < 7):
 IS_PY3 = False
 if major == 3:
     IS_PY3 = True
-
-"""---------------------------
-import python 2.6 module
----------------------------"""
-
-# try:
-#     from collections import defaultdict
-# except ImportError:
-#     print("Python collections module is needed. Please install it")
-#     sys.exit(1)
 
 """---------------------------
 load mailer for simplified email sending
@@ -433,6 +425,10 @@ class BreachBlocker(object):
         dbcursor.execute("CREATE TABLE IF NOT EXISTS whitelist (ip, date)")
         try:
             dbcursor.execute("ALTER TABLE addresses ADD COLUMN reason")
+        except sqlite3.OperationalError as e:
+            pass
+        try:
+            dbcursor.execute("CREATE TABLE IF NOT EXISTS history (ip, date)")
         except sqlite3.OperationalError as e:
             pass
         dbconn.commit()
@@ -807,8 +803,7 @@ class BreachBlocker(object):
     def _updateDueToViolations(self):
         """ update the firewall and add block entries to the database """
 
-        sys.stdout.write("Updating firewall... ")
-        sys.stdout.flush()
+        print("Updating firewall... ", end="", flush=True)
         
         new_ips = []
         ip_violations = {}
@@ -837,8 +832,7 @@ class BreachBlocker(object):
                 
                 violations = ", ".join(ip_violations[ip])
                 
-                sys.stdout.write("\n\033[31mBlocking host %s (%s)\033[0m" % (ip, violations))
-                sys.stdout.flush()
+                print("\n\033[31mBlocking host %s (%s)\033[0m" % (ip, violations), end="", flush=True)
                 
                 if self.dry_run:
                     continue
@@ -851,7 +845,7 @@ class BreachBlocker(object):
                         )
                         self.dbconn.commit()
                     if self.write_syslog:
-                        syslog.syslog(syslog.LOG_NOTICE, "IP "+ip+" was blocked due to "+violations+" violation")
+                        syslog.syslog(syslog.LOG_NOTICE, "IP " + ip + " was blocked due to " + violations + " violation")
                     self._fw_updated = True
                 else:
                     self.printError("Sorry. error when updating firewall (violations)...")
@@ -1133,7 +1127,7 @@ class BBCli(BreachBlocker):
 
 
 class CliLogger(object):
-    """ Looger class for cli commands """
+    """ Logger class for cli commands """
 
     @staticmethod
     def write(text):
