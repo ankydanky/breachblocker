@@ -46,6 +46,10 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 CHANGELOG:
 -----------
 
+2.3.0:
+
+* TODO: block history
+
 2.2.0:
 
 * added FreeBSD 12 support
@@ -86,7 +90,7 @@ CHANGELOG:
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 __modified__ = "2019-03-08"
 
 """---------------------------
@@ -108,11 +112,11 @@ if major == 3:
 import python 2.6 module
 ---------------------------"""
 
-try:
-    from collections import defaultdict
-except ImportError:
-    print("Python collections module is needed. Please install it")
-    sys.exit(1)
+# try:
+#     from collections import defaultdict
+# except ImportError:
+#     print("Python collections module is needed. Please install it")
+#     sys.exit(1)
 
 """---------------------------
 load mailer for simplified email sending
