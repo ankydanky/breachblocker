@@ -7,6 +7,8 @@ Type=fork
 PIDFile=/var/run/breachblocker.pid
 ExecStart=/usr/bin/python /root/breachblocker/breachblocker.py
 ExecStop=/usr/bin/python /root/breachblocker/breachblocker.py --kill
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
