@@ -1,4 +1,4 @@
-# BreachBlocker
+# BreachBlocker - 2.2.0 STABLE
 Breachblocker is a log scanner for intrusion attempts and ip blocker, similar to Fail2Ban. I created Breachblocker because 
 Fail2Ban was to complicated to setup correctly in my opinion.
 
