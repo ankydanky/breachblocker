@@ -51,7 +51,7 @@ CHANGELOG:
 
 2.3.0:
 
-* TODO: block history
+* TODO: block history (keep hosts which were already blocked few times higher removal timeout)
 
 2.2.0:
 
@@ -840,6 +840,10 @@ class BreachBlocker(object):
                         self.dbcursor.execute(
                             "INSERT INTO addresses (ip, date, reason) VALUES (?, DATETIME('now', 'localtime'), ?)",
                             (ip, violations)
+                        )
+                        self.dbcursor.execute(
+                            "INSERT INTO history (ip, date) VALUES (?, DATETIME('now', 'localtime'))",
+                            (ip,)
                         )
                         self.dbconn.commit()
                     if self.write_syslog:
