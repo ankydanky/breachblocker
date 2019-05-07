@@ -51,7 +51,8 @@ CHANGELOG:
 
 2.3.0:
 
-* TODO: block history (keep hosts which were already blocked few times higher removal timeout)
+* added: block history
+    (keep hosts which were already blocked longer: min 24 hrs on 2nd block, 48 hrs 3rd block etc)
 
 2.2.0:
 
@@ -94,7 +95,7 @@ CHANGELOG:
 
 __author__ = "Andy Kayl"
 __version__ = "2.3.0"
-__modified__ = "2019-05-03"
+__modified__ = "2019-05-07"
 
 """---------------------------
 check python version before running
@@ -343,6 +344,22 @@ class Firewall(object):
 
 class BreachBlocker(object):
     """ Breachblocker main class """
+
+    @staticmethod
+    def initDB(self):
+        """ init SQLite database and fetch data """
+
+        dbconn = sqlite3.connect(self.dbfile)
+        dbcursor = dbconn.cursor()
+        dbcursor.execute("CREATE TABLE IF NOT EXISTS addresses (ip, date, reason)")
+        dbcursor.execute("CREATE TABLE IF NOT EXISTS whitelist (ip, date)")
+        dbcursor.execute("CREATE TABLE IF NOT EXISTS history (ip, date)")
+        try:
+            dbcursor.execute("ALTER TABLE addresses ADD COLUMN reason")
+        except sqlite3.OperationalError as e:
+            pass
+        dbconn.commit()
+        dbconn.close()
     
     def __init__(self):
         """ Init breachblocker class, set config params, detect firewall and more """
@@ -416,21 +433,6 @@ class BreachBlocker(object):
             self.mode = "rhel"
         elif found_freebsd:
             self.mode = "freebsd"
-    
-    def initDB(self):
-        """ init SQLite database and fetch data """
-
-        dbconn = sqlite3.connect(self.dbfile)
-        dbcursor = dbconn.cursor()
-        dbcursor.execute("CREATE TABLE IF NOT EXISTS addresses (ip, date, reason)")
-        dbcursor.execute("CREATE TABLE IF NOT EXISTS whitelist (ip, date)")
-        dbcursor.execute("CREATE TABLE IF NOT EXISTS history (ip, date)")
-        try:
-            dbcursor.execute("ALTER TABLE addresses ADD COLUMN reason")
-        except sqlite3.OperationalError as e:
-            pass
-        dbconn.commit()
-        dbconn.close()
     
     def loadRules(self):
         """ load rules from directory """
@@ -847,7 +849,9 @@ class BreachBlocker(object):
                         )
                         self.dbconn.commit()
                     if self.write_syslog:
-                        syslog.syslog(syslog.LOG_NOTICE, "IP " + ip + " was blocked due to " + violations + " violation")
+                        syslog.syslog(
+                            syslog.LOG_NOTICE, "IP " + ip + " was blocked due to " + violations + " violation"
+                        )
                     self._fw_updated = True
                 else:
                     self.printError("Sorry. error when updating firewall (violations)...")
@@ -877,22 +881,34 @@ class BreachBlocker(object):
             print("\033[33mdisabled.\033[0m")
             return
         
-        r_count = 0
-        unix_stamp = int(time.time()) - (self.block_timeout * 60)
-        deadline = datetime.datetime.fromtimestamp(unix_stamp).strftime("%Y-%m-%d %H:%M:%S")
+        count_remove = 0
         
         for row in self.ip_rows:
+            res_history_ip = self.dbcursor.execute(
+                "SELECT COUNT(ip) AS cnt FROM history WHERE ip=?",
+                (row[0],)
+            ).fetchall()
+
+            unix_stamp = int(time.time()) - (self.block_timeout * 60)
+            if res_history_ip[0][0] > 1:
+                timeout_sec = 1210
+                if self.block_timeout > 1220:
+                    timeout_sec = self.block_timeout
+                unix_stamp = int(time.time()) - (timeout_sec * 60 * res_history_ip[0]['cnt'])
+            
+            deadline = datetime.datetime.fromtimestamp(unix_stamp).strftime("%Y-%m-%d %H:%M:%S")
+            
             if row[1] < deadline:
                 if not self.dry_run:
                     self.dbcursor.execute("DELETE FROM addresses WHERE ip=?", (row[0],))
                     if row[0] in self._fw_source_blocked:
                         self._removeAddressFromFirewall(row[0])
-                r_count += 1
+                count_remove += 1
         
-        if r_count > 0:
+        if count_remove > 0:
             if not self.dry_run:
                 self.dbconn.commit()
-            print("\033[32m%d addresses removed.\033[0m" % r_count)
+            print("\033[32m%d addresses removed.\033[0m" % count_remove)
         else:
             print("\033[32mdone.\033[0m")
     
@@ -913,6 +929,12 @@ class BreachBlocker(object):
         if self.dry_run:
             return
         self.dbcursor.execute("DELETE FROM addresses")
+        self.dbcursor.execute("DELETE FROM history")
+        self.dbconn.commit()
+    
+    def clearOldHistory(self):
+        """ clear old history from database """
+        self.dbcursor.execute("DELETE FROM history WHERE date<DATE('now', '-30 days')")
         self.dbconn.commit()
     
     def updateFirewall(self):
@@ -960,12 +982,12 @@ class BreachBlocker(object):
     def run(self):
         """ run the script """
         self.checkOS()
-        self.initDB()
         self.loadRules()
         self.checkSoftware()
         self.checkLogfiles()
         self.dbconn = sqlite3.connect(self.dbfile)
         self.dbcursor = self.dbconn.cursor()
+        self.clearOldHistory()
         self.scan()
         self.updateFirewall()
         self.sendNotif()
@@ -1151,6 +1173,8 @@ if __name__ == '__main__':
         print("\033[36mRunning in DRY-RUN. No changes will be done.\033[0m")
 
     try:
+
+        BreachBlocker.initDB()
         
         if args.kill:
             BBCli().flush()
