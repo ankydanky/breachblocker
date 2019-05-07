@@ -47,6 +47,7 @@ CHANGELOG:
 * removed: support for python 2
 * added: block history
     (keep hosts which were already blocked longer: min 24 hrs on 2nd block, 48 hrs 3rd block etc)
+* added: mail smtp host config
 
 2.2.0:
 
@@ -169,7 +170,9 @@ class Firewall(object):
         
         self.iptables_version = None
         self.firewall_type = config.get("global", "firewall")
-        self.firewall = self._detect()
+        self.firewall = None
+        
+        self._detect()
     
     def _detect(self):
         """ detect firewall type and return it / store it inside class """
@@ -202,7 +205,7 @@ class Firewall(object):
     
     def add(self, ip):
         """ add the given ip to the system firewall rules """
-
+        
         if self.firewall == "firewalld":
             proc = subprocess.Popen(
                 "/usr/bin/firewall-cmd --quiet --zone drop --add-source %s" % ip,
@@ -231,7 +234,7 @@ class Firewall(object):
         
         else:
             cmd = "/sbin/iptables -w -I INPUT -s %s -j DROP"
-            if self.iptables_version < "1.04.20":
+            if self.iptables_version and self.iptables_version < "1.04.20":
                 cmd = "/sbin/iptables -I INPUT -s %s -j DROP"
             proc = subprocess.Popen(cmd % ip, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
@@ -250,6 +253,8 @@ class Firewall(object):
             )
             proc.wait()
             blocked = proc.communicate()[0]
+            if IS_PY3:
+                blocked = blocked.decode()
             blocked = re.split("\s{1,}", blocked)
             for entry in blocked:
                 if entry == "":
@@ -262,7 +267,10 @@ class Firewall(object):
                 shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             proc.wait()
-            blocked = proc.communicate()[0].split("\n")
+            blocked = proc.communicate()[0]
+            if IS_PY3:
+                blocked = blocked.decode()
+            blocked = blocked.split("\n")
             for entry in blocked:
                 if entry == "":
                     continue
@@ -272,7 +280,7 @@ class Firewall(object):
         
         else:
             cmd = "/sbin/iptables -w -L INPUT -n | grep DROP"
-            if self.iptables_version < "1.04.20":
+            if self.iptables_version and self.iptables_version < "1.04.20":
                 cmd = "/sbin/iptables -L INPUT -n | grep DROP"
             blocked = os.popen(cmd).readlines()
             proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -319,7 +327,7 @@ class Firewall(object):
         
         else:
             cmd = "/sbin/iptables -w -D INPUT -s %s -j DROP"
-            if self.iptables_version < "1.04.20":
+            if self.iptables_version and self.iptables_version < "1.04.20":
                 cmd = "/sbin/iptables -D INPUT -s %s -j DROP"
             proc = subprocess.Popen(
                 cmd % ip,
@@ -456,7 +464,7 @@ class BreachBlocker(object):
         """ parse the given rule and return dict """
 
         rulesdir = os.path.abspath(os.path.dirname(__file__))
-        ruleconf = ConfigParser.ConfigParser()
+        ruleconf = configparser.ConfigParser()
         ruleconf.read(os.path.join(rulesdir, "rules", "%s_%s.conf" % (osname, svrname)))
         
         return {
@@ -580,7 +588,7 @@ class BreachBlocker(object):
 
         now_in_secs = int(time.time())
         ignore_timeout = 3600
-        block_timeout = config.get("global", "block_timeout") * 60
+        block_timeout = config.getint("global", "block_timeout") * 60
 
         if block_timeout < ignore_timeout:
             ignore_timeout = block_timeout
@@ -617,6 +625,8 @@ class BreachBlocker(object):
             proc = subprocess.Popen(ssh_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
+            if IS_PY3:
+                stdout = stdout.decode()
             shell_ret = stdout.rstrip().split("\n")
             for i in shell_ret:
                 if not self._checkLogTimeout(i):
@@ -640,6 +650,8 @@ class BreachBlocker(object):
             proc = subprocess.Popen(mail_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
+            if IS_PY3:
+                stdout = stdout.decode()
             shell_ret = stdout.rstrip().split("\n")
             for i in shell_ret:
                 if not self._checkLogTimeout(i):
@@ -660,6 +672,8 @@ class BreachBlocker(object):
             proc = subprocess.Popen(smtp_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
+            if IS_PY3:
+                stdout = stdout.decode()
             shell_ret = stdout.rstrip().split("\n")
             for i in shell_ret:
                 if not self._checkLogTimeout(i):
@@ -681,6 +695,8 @@ class BreachBlocker(object):
             proc = subprocess.Popen(ftp_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
+            if IS_PY3:
+                stdout = stdout.decode()
             shell_ret = stdout.rstrip().split("\n")
             for i in shell_ret:
                 if not self._checkLogTimeout(i):
@@ -705,6 +721,8 @@ class BreachBlocker(object):
             proc = subprocess.Popen(http_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             proc.wait()
             (stdout, stderr) = proc.communicate()
+            if IS_PY3:
+                stdout = stdout.decode()
             shell_ret = stdout.rstrip().split("\n")
             for i in shell_ret:
                 if not self._checkLogTimeout(i):
@@ -957,7 +975,7 @@ class BreachBlocker(object):
         message.Body = ""
         for ip in self._new_ips:
             message.Body += "Host " + ip + " added to firewall droplist (" + ", ".join(self._ip_violations[ip]) + ")\n"
-        sender = mailer.Mailer("localhost")
+        sender = mailer.Mailer(config.get("email", "mailhost"))
         try:
             sender.send(message)
         except Exception:
@@ -1187,7 +1205,7 @@ if __name__ == '__main__':
         elif args.flush:
             BBCli().flush()
         
-        elif config.getint("global", "daemon") or (args.daemon and not args.single):
+        elif (args.daemon or config.getint("global", "daemon")) and not args.single:
             pid_file = config.get("global", "pid_file")
             if os.path.isfile(pid_file):
                 BreachBlocker().printError("PID file exists. Is there already a process running?")
