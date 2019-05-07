@@ -15,6 +15,8 @@ and following firewalls:
 * FirewallD
 * IPFW
 
+**You need at least Python 3.5 to run the script. Python <3.5 is not supported. If you need Python 2 support please use the 2.2 branch.**
+
 The startup-scripts folder contains SystemD and BSD Init scripts so that it can be started at boot time. It can 
 run once (script) or as background-process (daemon)
 
