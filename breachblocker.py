@@ -346,7 +346,7 @@ class BreachBlocker(object):
     """ Breachblocker main class """
 
     @staticmethod
-    def initDB(self):
+    def initDB():
         """ init SQLite database and fetch data """
 
         dbconn = sqlite3.connect(self.dbfile)
