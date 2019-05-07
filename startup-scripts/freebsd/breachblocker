@@ -10,7 +10,7 @@ name="breachblocker"
 prefix="bb"
 rcvar="breachblocker_enable"
 
-command="/usr/local/bin/python"
+command="/usr/local/bin/python3.6"
 pidfile="/var/run/breachblocker.pid"
 
 start_cmd="${prefix}_start"

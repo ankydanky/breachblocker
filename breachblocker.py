@@ -1,7 +1,4 @@
-#! /usr/bin/env python
-# encoding: utf-8
-
-from __future__ import unicode_literals, print_function, division
+# coding: utf-8
 
 import os
 import sys
@@ -17,13 +14,9 @@ import signal
 import traceback
 import argparse
 import getpass
+import configparser
 
 from collections import defaultdict
-
-try:
-    import ConfigParser
-except ImportError as e:
-    import configparser as ConfigParser
 
 
 """
@@ -51,6 +44,7 @@ CHANGELOG:
 
 2.3.0:
 
+* removed: support for python 2
 * added: block history
     (keep hosts which were already blocked longer: min 24 hrs on 2nd block, 48 hrs 3rd block etc)
 
@@ -104,8 +98,8 @@ check python version before running
 major = sys.version_info[0]
 minor = sys.version_info[1]
 
-if (major < 3 and minor < 7):
-    print("You need Python 2.7+ to run this script")
+if (major < 3 and minor < 5):
+    print("You need Python 3.5+ to run this script")
     sys.exit(1)
 
 IS_PY3 = False
@@ -126,7 +120,7 @@ except ImportError:
 load config
 ---------------------------"""
 
-config = ConfigParser.ConfigParser()
+config = configparser.ConfigParser()
 config.read(os.path.join(os.path.dirname(__file__), "breachblocker.conf"))
 
 """---------------------------
@@ -348,8 +342,8 @@ class BreachBlocker(object):
     @staticmethod
     def initDB():
         """ init SQLite database and fetch data """
-
-        dbconn = sqlite3.connect(self.dbfile)
+        
+        dbconn = sqlite3.connect(config.get("global", "db_file"))
         dbcursor = dbconn.cursor()
         dbcursor.execute("CREATE TABLE IF NOT EXISTS addresses (ip, date, reason)")
         dbcursor.execute("CREATE TABLE IF NOT EXISTS whitelist (ip, date)")
