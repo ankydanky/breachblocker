@@ -4,9 +4,15 @@ After=multi-user.target
 
 [Service]
 Type=fork
+
+# please make sure this is the same as specified in
+# the breachblocker config file
 PIDFile=/var/run/breachblocker.pid
-ExecStart=/usr/bin/python /root/breachblocker/breachblocker.py
-ExecStop=/usr/bin/python /root/breachblocker/breachblocker.py --kill
+
+# please update paths for your python executable and .py file
+ExecStart=/usr/bin/python3.6 /root/breachblocker/breachblocker.py
+ExecStop=/usr/bin/python3.6 /root/breachblocker/breachblocker.py --kill
+
 Restart=always
 RestartSec=10
 

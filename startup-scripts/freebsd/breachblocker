@@ -10,7 +10,13 @@ name="breachblocker"
 prefix="bb"
 rcvar="breachblocker_enable"
 
+# please update the needed command and bbpath paths below to match
+# your python executable and .py path
 command="/usr/local/bin/python3.6"
+bbpath="/root/breachblocker/breachblocker.py"
+
+# please make sure tho given PID file is the same as in the
+# breachblocker config file
 pidfile="/var/run/breachblocker.pid"
 
 start_cmd="${prefix}_start"
@@ -20,11 +26,11 @@ status_cmd="${prefix}_status"
 
 bb_start() {
    echo "Breachblocker starting..."
-   $command /root/breachblocker/breachblocker.py
+   $command $bbpath
 }
 
 bb_stop() {
-   $command /root/breachblocker/breachblocker.py --kill
+   $command $bbpath --kill
 }
 
 bb_restart() {
