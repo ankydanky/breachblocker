@@ -42,6 +42,10 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 CHANGELOG:
 -----------
 
+2.3.1:
+
+* fixed: bug when removing ip addresses
+
 2.3.0:
 
 * removed: support for python 2
@@ -89,8 +93,8 @@ CHANGELOG:
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.3.0"
-__modified__ = "2019-05-07"
+__version__ = "2.3.1"
+__modified__ = "2019-05-09"
 
 """---------------------------
 check python version before running
@@ -318,6 +322,7 @@ class Firewall(object):
             stdout, stderr = proc.communicate()
             if stdout == "":
                 return
+            stdout = stdout.decode()
             ip = re.split("\s+", stdout)[0]
             proc = subprocess.Popen(
                 "/sbin/ipfw -q table %d delete %s" % (self._ipfw_rulestable, ip),
