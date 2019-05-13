@@ -14,7 +14,7 @@ and following firewalls:
 * FirewallD
 * IPFW
 
-**Current version: 2.3.2**
+**Current version: 2.3.3**
 
 **You need at least Python 3.5 to run the script. Python <3.5 is not supported. If you need Python 2 support please use the 2.2 branch.**
 
