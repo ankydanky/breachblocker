@@ -42,6 +42,10 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 CHANGELOG:
 -----------
 
+2.3.2:
+
+* fixed: bug while removing reoccuring addresses
+
 2.3.1:
 
 * fixed: bug when removing ip addresses
@@ -911,7 +915,7 @@ class BreachBlocker(object):
                 timeout_sec = 1210
                 if self.block_timeout > 1220:
                     timeout_sec = self.block_timeout
-                unix_stamp = int(time.time()) - (timeout_sec * 60 * res_history_ip[0]['cnt'])
+                unix_stamp = int(time.time()) - (timeout_sec * 60 * int(res_history_ip[0]['cnt']))
             
             deadline = datetime.datetime.fromtimestamp(unix_stamp).strftime("%Y-%m-%d %H:%M:%S")
             
