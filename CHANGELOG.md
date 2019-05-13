@@ -9,8 +9,8 @@
 ## 2.3.0:
 
 * removed: support for python 2
-* added: block history
-    (keep hosts which were already blocked longer: min 24 hrs on 2nd block, 48 hrs 3rd block etc)
+* added: block history \
+(keep hosts which were already blocked longer: min 24 hrs on 2nd block, 48 hrs 3rd block etc)
 * added: mail smtp host config
 
 ## 2.2.0:
