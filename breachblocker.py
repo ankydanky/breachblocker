@@ -40,7 +40,7 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.3.2"
+__version__ = "2.3.3"
 __modified__ = "2019-05-13"
 
 """---------------------------
@@ -893,7 +893,6 @@ class BreachBlocker(object):
         if self.dry_run:
             return
         self.dbcursor.execute("DELETE FROM addresses")
-        self.dbcursor.execute("DELETE FROM history")
         self.dbconn.commit()
     
     def clearOldHistory(self):
