@@ -34,8 +34,8 @@ bb_stop() {
 }
 
 bb_restart() {
-   stop
-   start
+   bb_stop
+   bb_start
 }
 
 bb_status() {
