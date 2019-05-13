@@ -1,3 +1,8 @@
+## 2.3.3:
+
+* fixed: restart bug in freebsd rc script
+* changed: do not remove history when stopping
+
 ## 2.3.2:
 
 * fixed: bug while removing reoccuring addresses
