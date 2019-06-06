@@ -40,8 +40,8 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.3.3"
-__modified__ = "2019-05-13"
+__version__ = "2.3.4"
+__modified__ = "2019-06-06"
 
 """---------------------------
 check python version before running
@@ -323,6 +323,7 @@ class BreachBlocker(object):
         self.write_syslog = int(config.get("global", "write_syslog"))
         self.attempts = int(config.get("global", "attempts"))
         self.block_timeout = int(config.get("global", "block_timeout"))
+        self.history_timeout = int(config.get("global", "history_timeout"))
         self.whitelist = config.get("global", "whitelist")
         self.blacklist = config.get("global", "blacklist")
         self.dbfile = config.get("global", "db_file")
@@ -897,7 +898,17 @@ class BreachBlocker(object):
     
     def clearOldHistory(self):
         """ clear old history from database """
-        self.dbcursor.execute("DELETE FROM history WHERE date<DATE('now', '-30 days')")
+        timeout = self.history_timeout
+        if timeout == 0:
+            return
+        if timeout < self.block_timeout:
+            timeout = self.block_timeout
+        self.dbcursor.execute(
+            """
+            DELETE FROM history
+            WHERE date<DATE('now', '-{0} seconds')
+            """.format(timeout)
+        )
         self.dbconn.commit()
     
     def updateFirewall(self):
