@@ -3,6 +3,7 @@ Breachblocker is a log scanner for intrusion attempts and ip blocker, similar to
 Fail2Ban was to complicated to setup correctly in my opinion.
 
 It can be used with following OSes:
+* CentOS 6
 * CentOS 7
 * FreeBSD 10
 * FreeBSD 11
@@ -14,7 +15,7 @@ and following firewalls:
 * FirewallD
 * IPFW
 
-**Current version: 2.3.3**
+**Current version: 2.3.4**
 
 **You need at least Python 3.5 to run the script. Python <3.5 is not supported. If you need Python 2 support please use the 2.2 branch.**
 
