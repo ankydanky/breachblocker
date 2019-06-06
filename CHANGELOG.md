@@ -1,3 +1,7 @@
+## 2.3.4:
+
+* added: block history clearing timeout
+
 ## 2.3.3:
 
 * fixed: restart bug in freebsd rc script
