@@ -1,3 +1,9 @@
+## 2.4.0
+
+* changed: some minor config / parameter descriptions
+* added: blacklist and whitelist ip addresses can be defined in a file
+* added: support for netmasks in black-/whitelist
+
 ## 2.3.4:
 
 * added: block history clearing timeout

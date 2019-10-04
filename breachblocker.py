@@ -40,8 +40,8 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.3.4"
-__modified__ = "2019-06-06"
+__version__ = "2.4.0"
+__modified__ = "2019-10-03"
 
 """---------------------------
 check python version before running
@@ -105,7 +105,7 @@ parser.add_argument(
     nargs=2,
     metavar=("MIN", "IPv4-ADDR")
 )
-parser.add_argument("--bl", help="List all blocked ip addresses", action="store_true")
+parser.add_argument("--bl", help="List all blocked ip addresses during scans", action="store_true")
 parser.add_argument("--wl", help="List all temporary whitelisted addresses", action="store_true")
 parser.add_argument("--flush", help="Clear all database/firewall adresses", action="store_true")
 parser.add_argument("--no-dryrun", help="Overwrite config setting for DRY-RUN", action="store_true")
@@ -717,7 +717,13 @@ class BreachBlocker(object):
 
         if self.blacklist == "":
             return []
-        blacklist = re.split("\s{1,}|\n", self.blacklist.lstrip().rstrip())
+        blacklist = self.blacklist
+        if blacklist.startswith("file:"):
+            filename = blacklist.replace("file:", "")
+            if not os.path.isfile(filename):
+                raise FileNotFoundError("Could not find blacklist: {file}".format(file=filename))
+            blacklist = open(filename, "r").read()
+        blacklist = re.split("\s{1,}|\n", blacklist.strip())
         return blacklist
     
     def _checkWhitelist(self, host):
@@ -725,7 +731,13 @@ class BreachBlocker(object):
 
         if self.whitelist == "":
             return False
-        whitelist = re.split("\s{1,}|\n", self.whitelist.lstrip().rstrip())
+        whitelist = self.whitelist
+        if whitelist.startswith("file:"):
+            filename = whitelist.replace("file:", "")
+            if not os.path.isfile(filename):
+                raise FileNotFoundError("Could not find whitelist: {file}".format(file=filename))
+            whitelist = open(filename, "r").read()
+        whitelist = re.split("\s{1,}|\n", whitelist.strip())
         for wl in whitelist:
             ip_found = False
             if wl == host:
@@ -777,7 +789,10 @@ class BreachBlocker(object):
             is_in_conf_wl = self._checkWhitelist(host)
             is_in_db_wl = self._checkDatabaseWhitelist(host)
             if not is_in_conf_wl and not is_in_db_wl:
-                ip = self._getHostAddress(host)
+                if re.search("/\d{1,2}$", host):
+                    ip = host
+                else:
+                    ip = self._getHostAddress(host)
                 if ip is not None and ip not in self._fw_source_blocked:
                     new_ips.append(ip)
         
@@ -1203,6 +1218,10 @@ if __name__ == '__main__':
     
     except KeyboardInterrupt:
         print("User cancelled script.")
+        sys.exit(1)
+    
+    except FileNotFoundError as e:
+        print(str(e))
         sys.exit(1)
     
     except Exception as e:
