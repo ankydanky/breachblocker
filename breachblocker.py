@@ -1193,7 +1193,7 @@ class BBCli(BreachBlocker):
             return
         print("")
         for row in res:
-            print("  {ip} (date)".format(ip=row[0], date=row[1]))
+            print("  {ip} ({date})".format(ip=row[0], date=row[1]))
 
 
 class CliLogger(object):
