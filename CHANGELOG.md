@@ -1,3 +1,10 @@
+## 2.5.0
+
+* added: config option "scan_interval" in deamon mode
+* added: default values if config parameter is not found
+* added: cli command to view history
+* changed: move object config to global config paramters
+
 ## 2.4.0
 
 * changed: some minor config / parameter descriptions
