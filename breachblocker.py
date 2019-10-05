@@ -40,8 +40,8 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.4.0"
-__modified__ = "2019-10-03"
+__version__ = "2.5.0"
+__modified__ = "2019-10-05"
 
 """---------------------------
 check python version before running
@@ -67,6 +67,31 @@ try:
 except ImportError:
     print("Python mailer module is needed. Please install it with: pip install mailer")
     sys.exit(1)
+
+"""---------------------------
+define default config variables
+---------------------------"""
+
+dry_run = 1
+daemon = 0
+pid_file = "/var/run/breachblocker.pid"
+scan_interval = 10
+write_syslog = 1
+attempts = 10
+block_timeout = 60
+history_timeout = 43200
+whitelist = "127.0.0.1"
+blacklist = ""
+dbfile = "/tmp/breachblocker.db"
+
+scan_http = 0
+scan_ssh = 0
+scan_ftp = 0
+scan_mail = 0
+scan_smtp = 0
+
+send_email = 0
+mailhost = "127.0.0.1"
     
 """---------------------------
 load config
@@ -74,6 +99,53 @@ load config
 
 config = configparser.ConfigParser()
 config.read(os.path.join(os.path.dirname(__file__), "breachblocker.conf"))
+
+if config.has_option("global", "dry_run"):
+    dry_run = config.getint("global", "dry_run")
+if config.has_option("global", "daemon"):
+    daemon = config.getint("global", "daemon")
+if config.has_option("global", "scan_interval"):
+    scan_interval = config.getint("global", "scan_interval")
+if config.has_option("global", "pid_file"):
+    pid_file = config.get("global", "pid_file")
+if config.has_option("global", "write_syslog"):
+    write_syslog = config.getint("global", "write_syslog")
+if config.has_option("global", "attempts"):
+    attempts = config.getint("global", "attempts")
+if config.has_option("global", "block_timeout"):
+    block_timeout = config.getint("global", "block_timeout")
+if config.has_option("global", "history_timeout"):
+    history_timeout = config.getint("global", "history_timeout")
+if config.has_option("global", "whitelist"):
+    whitelist = config.get("global", "whitelist")
+if config.has_option("global", "blacklist"):
+    blacklist = config.get("global", "blacklist")
+if config.has_option("global", "db_file"):
+    dbfile = config.get("global", "db_file")
+
+if config.has_option("scan", "http"):
+    scan_http = config.getint("scan", "http")
+if config.has_option("scan", "ssh"):
+    scan_ssh = config.getint("scan", "ssh")
+if config.has_option("scan", "ftp"):
+    scan_ftp = config.getint("scan", "ftp")
+if config.has_option("scan", "mail"):
+    scan_mail = config.getint("scan", "mail")
+if config.has_option("scan", "smtp"):
+    scan_smtp = config.getint("scan", "smtp")
+
+http_svr = config.get("servers", "http")
+ftp_svr = config.get("servers", "ftp")
+mail_svr = config.get("servers", "mail")
+ssh_svr = config.get("servers", "ssh")
+smtp_svr = config.get("servers", "smtp")
+
+if config.has_option("email", "send"):
+    send_email = config.getint("email", "send")
+if config.has_option("email", "mailhost"):
+    mailhost = config.get("email", "mailhost")
+email_from = config.get("email", "from")
+email_to = config.get("email", "recipient")
 
 """---------------------------
 supported server list
@@ -109,6 +181,7 @@ parser.add_argument("--bl", help="List all blocked ip addresses during scans", a
 parser.add_argument("--wl", help="List all temporary whitelisted addresses", action="store_true")
 parser.add_argument("--flush", help="Clear all database/firewall adresses", action="store_true")
 parser.add_argument("--no-dryrun", help="Overwrite config setting for DRY-RUN", action="store_true")
+parser.add_argument("--history", help="Show history entries", action="store_true")
 
 
 class Firewall(object):
@@ -318,31 +391,7 @@ class BreachBlocker(object):
     def __init__(self):
         """ Init breachblocker class, set config params, detect firewall and more """
         
-        self.dry_run = dry_run
-        self.pid_file = config.get("global", "pid_file")
-        self.write_syslog = int(config.get("global", "write_syslog"))
-        self.attempts = int(config.get("global", "attempts"))
-        self.block_timeout = int(config.get("global", "block_timeout"))
-        self.history_timeout = int(config.get("global", "history_timeout"))
-        self.whitelist = config.get("global", "whitelist")
-        self.blacklist = config.get("global", "blacklist")
-        self.dbfile = config.get("global", "db_file")
-        
-        self.scan_http = int(config.get("scan", "http"))
-        self.scan_ssh = int(config.get("scan", "ssh"))
-        self.scan_ftp = int(config.get("scan", "ftp"))
-        self.scan_mail = int(config.get("scan", "mail"))
-        self.scan_smtp = int(config.get("scan", "smtp"))
-        
-        self.http_svr = config.get("servers", "http")
-        self.ftp_svr = config.get("servers", "ftp")
-        self.mail_svr = config.get("servers", "mail")
-        self.ssh_svr = config.get("servers", "ssh")
-        self.smtp_svr = config.get("servers", "smtp")
-        
-        self.send_email = int(config.get("email", "send"))
-        self.email_from = config.get("email", "from")
-        self.email_to = config.get("email", "recipient")
+        self.write_syslog = write_syslog
 
         self.firewall = Firewall().firewall
         self.mode = None
@@ -394,23 +443,23 @@ class BreachBlocker(object):
 
         nosupp = "The specified server/rules (%s) is/are not supported on this OS."
         
-        if self.http_svr not in supp_servers[self.mode]:
+        if http_svr not in supp_servers[self.mode]:
             self.printError(nosupp % http_svr)
-        if self.mail_svr not in supp_servers[self.mode]:
+        if mail_svr not in supp_servers[self.mode]:
             self.printError(nosupp % mail_svr)
-        if self.smtp_svr not in supp_servers[self.mode]:
+        if smtp_svr not in supp_servers[self.mode]:
             self.printError(nosupp % smtp_svr)
-        if self.ftp_svr not in supp_servers[self.mode]:
+        if ftp_svr not in supp_servers[self.mode]:
             self.printError(nosupp % ftp_svr)
-        if self.ssh_svr not in supp_servers[self.mode]:
+        if ssh_svr not in supp_servers[self.mode]:
             self.printError(nosupp % ssh_svr)
         
         self.rules = {
-            "http": self._parseRule(self.mode, self.http_svr),
-            "mail": self._parseRule(self.mode, self.mail_svr),
-            "smtp": self._parseRule(self.mode, self.smtp_svr),
-            "ftp": self._parseRule(self.mode, self.ftp_svr),
-            "ssh": self._parseRule(self.mode, self.ssh_svr)
+            "http": self._parseRule(self.mode, http_svr),
+            "mail": self._parseRule(self.mode, mail_svr),
+            "smtp": self._parseRule(self.mode, smtp_svr),
+            "ftp": self._parseRule(self.mode, ftp_svr),
+            "ssh": self._parseRule(self.mode, ssh_svr)
         }
     
     def _parseRule(self, osname, svrname):
@@ -449,30 +498,30 @@ class BreachBlocker(object):
         ftpsvr_found = False
         sshsvr_found = False
         
-        if self.scan_http:
+        if scan_http:
             websvr_found = self.testRC("http")
             if not websvr_found:
                 errormsg += "Web server not found: " + http_svr + "\n"
         
-        if self.scan_mail:
+        if scan_mail:
             mailsvr_found = self.testRC("mail")
             if not mailsvr_found:
-                errormsg += "POP/IMAP server not found: " + self.mail_svr + "\n"
+                errormsg += "POP/IMAP server not found: " + mail_svr + "\n"
         
-        if self.scan_smtp:
+        if scan_smtp:
             smtpsvr_found = self.testRC("smtp")
             if not smtpsvr_found:
-                errormsg += "SMTP server not found: " + self.smtp_svr + "\n"
+                errormsg += "SMTP server not found: " + smtp_svr + "\n"
         
-        if self.scan_ftp:
+        if scan_ftp:
             ftpsvr_found = self.testRC("ftp")
             if not ftpsvr_found:
-                errormsg += "FTP server not found: " + self.ftp_svr + "\n"
+                errormsg += "FTP server not found: " + ftp_svr + "\n"
         
-        if self.scan_ssh:
+        if scan_ssh:
             sshsvr_found = self.testRC("ssh")
             if not sshsvr_found:
-                errormsg += "SSH server not found: " + self.ssh_svr + "\n"
+                errormsg += "SSH server not found: " + ssh_svr + "\n"
         
         if errormsg != "":
             
@@ -513,23 +562,23 @@ class BreachBlocker(object):
     def checkLogfiles(self):
         """ check if the specified log files do exist """
         
-        if self.http_svr_data and self.scan_http:
+        if self.http_svr_data and scan_http:
             if not os.path.isfile(self.http_svr_data['log']):
                 self.printError("HTTP log file " + self.http_svr_data['log'] + " not found")
         
-        if self.ftp_svr_data and self.scan_ftp:
+        if self.ftp_svr_data and scan_ftp:
             if not os.path.isfile(self.ftp_svr_data['log']):
                 self.printError("FTP log file " + self.ftp_svr_data['log'] + " not found")
         
-        if self.ssh_svr_data and self.scan_ssh:
+        if self.ssh_svr_data and scan_ssh:
             if not os.path.isfile(self.ssh_svr_data['log']):
                 self.printError("SSH log file " + self.ssh_svr_data['log'] + " not found")
         
-        if self.mail_svr_data and self.scan_mail:
+        if self.mail_svr_data and scan_mail:
             if not os.path.isfile(self.mail_svr_data['log']):
                 self.printError("MAIL log file " + self.mail_svr_data['log'] + " not found")
         
-        if self.smtp_svr_data and self.scan_smtp:
+        if self.smtp_svr_data and scan_smtp:
             if not os.path.isfile(self.smtp_svr_data['log']):
                 self.printError("SMTP log file " + self.smtp_svr_data['log'] + " not found")
     
@@ -571,7 +620,7 @@ class BreachBlocker(object):
         self._ips_to_block = []
         self._blk_cause = self._blk_reason
         
-        if self.ssh_svr_data and self.scan_ssh:
+        if self.ssh_svr_data and scan_ssh:
             ssh_comm = "cat %s | grep -i sshd | grep -i -E \"%s\" | tail -n %s" % (
                 self.ssh_svr_data['log'], self.ssh_svr_data['log_pattern'], line_numbers
             )
@@ -594,7 +643,7 @@ class BreachBlocker(object):
                     ip_list.append(ip)
                     self._blk_reason['ssh'].append(ip)
         
-        if self.mail_svr_data and self.scan_mail:
+        if self.mail_svr_data and scan_mail:
             mail_comm = "cat %s | " % self.mail_svr_data['log']
             mail_comm += "grep -i -E \"(imap|pop3)\" | "
             mail_comm += "grep -E -v \"user=<>\" | "
@@ -616,7 +665,7 @@ class BreachBlocker(object):
                     ip_list.append(ip[1])
                     self._blk_reason['mail'].append(ip[1])
         
-        if self.smtp_svr_data and self.scan_smtp:
+        if self.smtp_svr_data and scan_smtp:
             smtp_comm = "cat %s | " % self.smtp_svr_data['log']
             smtp_comm += "grep -i -E \"(smtp|sasl)\" | "
             smtp_comm += "grep -i -E -v \"Connection lost\" | "
@@ -634,14 +683,14 @@ class BreachBlocker(object):
                 match = re.search(self.smtp_svr_data['ip_pattern'], i, re.IGNORECASE)
                 if match:
                     match = match.group()
-                    if self.smtp_svr == "postfix":
+                    if smtp_svr == "postfix":
                         ip = re.sub("(\[|\])", "", match)
                     else:
                         ip = match.rstrip().split("=")[1]
                     ip_list.append(ip)
                     self._blk_reason['smtp'].append(ip)
         
-        if self.ftp_svr_data and self.scan_ftp:
+        if self.ftp_svr_data and scan_ftp:
             ftp_comm = "cat %s | grep -i ftpd | grep -i -E \"%s\" | tail -n %s" % (
                 self.ftp_svr_data['log'], self.ftp_svr_data['log_pattern'], line_numbers
             )
@@ -657,17 +706,17 @@ class BreachBlocker(object):
                 match = re.search(self.ftp_svr_data['ip_pattern'], i, re.IGNORECASE)
                 if match:
                     match = match.group()
-                    if self.ftp_svr == "proftpd":
+                    if ftp_svr == "proftpd":
                         ip = re.sub("(::ffff:|\[|\])", "", match)
-                    elif self.ftp_svr == "vsftpd":
+                    elif ftp_svr == "vsftpd":
                         ip = match.rstrip().split("=")
                         ip = ip[1]
-                    elif self.ftp_svr == "pure-ftpd":
+                    elif ftp_svr == "pure-ftpd":
                         ip = re.sub("\?@", "", match)
                     ip_list.append(ip)
                     self._blk_reason['ftp'].append(ip)
         
-        if self.http_svr_data and self.scan_http:
+        if self.http_svr_data and scan_http:
             http_comm = "cat %s | grep -i -E \"%s\" | tail -n %s" % (
                 self.http_svr_data['log'], self.http_svr_data['log_pattern'], line_numbers
             )
@@ -692,7 +741,7 @@ class BreachBlocker(object):
         for x in ip_list:
             unique_ip_counts[x] += 1
         for ip, num in unique_ip_counts.items():
-            if num > self.attempts:
+            if num > attempts:
                 self._ips_to_block.append(ip)
         
         for ip in self._getBlacklistAddresses():
@@ -715,30 +764,30 @@ class BreachBlocker(object):
     def _getBlacklistAddresses(self):
         """ get blacklisted ip addresses from config """
 
-        if self.blacklist == "":
+        if blacklist == "":
             return []
-        blacklist = self.blacklist
+        blist = blacklist
         if blacklist.startswith("file:"):
             filename = blacklist.replace("file:", "")
             if not os.path.isfile(filename):
                 raise FileNotFoundError("Could not find blacklist: {file}".format(file=filename))
-            blacklist = open(filename, "r").read()
-        blacklist = re.split("\s{1,}|\n", blacklist.strip())
-        return blacklist
+            blist = open(filename, "r").read()
+        blist = re.split("\s{1,}|\n", blist.strip())
+        return blist
     
     def _checkWhitelist(self, host):
         """ check if host is in config whitelist """
 
-        if self.whitelist == "":
+        if whitelist == "":
             return False
-        whitelist = self.whitelist
+        wlist = whitelist
         if whitelist.startswith("file:"):
             filename = whitelist.replace("file:", "")
             if not os.path.isfile(filename):
                 raise FileNotFoundError("Could not find whitelist: {file}".format(file=filename))
-            whitelist = open(filename, "r").read()
-        whitelist = re.split("\s{1,}|\n", whitelist.strip())
-        for wl in whitelist:
+            wlist = open(filename, "r").read()
+        wlist = re.split("\s{1,}|\n", wlist.strip())
+        for wl in wlist:
             ip_found = False
             if wl == host:
                 ip_found = True
@@ -814,7 +863,7 @@ class BreachBlocker(object):
                 
                 print("\n\033[31mBlocking host %s (%s)\033[0m" % (ip, violations), end="", flush=True)
                 
-                if self.dry_run:
+                if dry_run:
                     continue
                 
                 if Firewall().add(ip) == 0:
@@ -849,7 +898,7 @@ class BreachBlocker(object):
         if returncode == 0 and self.write_syslog:
             syslog.syslog(
                 syslog.LOG_NOTICE,
-                "IP %s was removed due to block timeout (%s minutes)" % (ip, self.block_timeout)
+                "IP %s was removed due to block timeout (%s minutes)" % (ip, block_timeout)
             )
     
     def _removeOutdatedBlocklist(self):
@@ -857,7 +906,7 @@ class BreachBlocker(object):
 
         print("Removing old blocked ip addresses... ", end="")
         
-        if self.block_timeout == 0:
+        if block_timeout == 0:
             print("\033[33mdisabled.\033[0m")
             return
         
@@ -869,24 +918,24 @@ class BreachBlocker(object):
                 (row[0],)
             ).fetchall()
 
-            unix_stamp = int(time.time()) - (self.block_timeout * 60)
+            unix_stamp = int(time.time()) - (block_timeout * 60)
             if res_history_ip[0][0] > 1:
                 timeout_sec = 1210
-                if self.block_timeout > 1220:
-                    timeout_sec = self.block_timeout
+                if block_timeout > 1220:
+                    timeout_sec = block_timeout
                 unix_stamp = int(time.time()) - (timeout_sec * 60 * int(res_history_ip[0][0]))
             
             deadline = datetime.datetime.fromtimestamp(unix_stamp).strftime("%Y-%m-%d %H:%M:%S")
             
             if row[1] < deadline:
-                if not self.dry_run:
+                if not dry_run:
                     self.dbcursor.execute("DELETE FROM addresses WHERE ip=?", (row[0],))
                     if row[0] in self._fw_source_blocked:
                         self._removeAddressFromFirewall(row[0])
                 count_remove += 1
         
         if count_remove > 0:
-            if not self.dry_run:
+            if not dry_run:
                 self.dbconn.commit()
             print("\033[32m%d addresses removed.\033[0m" % count_remove)
         else:
@@ -906,18 +955,18 @@ class BreachBlocker(object):
     
     def clear(self):
         """ cleanup database entries """
-        if self.dry_run:
+        if dry_run:
             return
         self.dbcursor.execute("DELETE FROM addresses")
         self.dbconn.commit()
     
     def clearOldHistory(self):
         """ clear old history from database """
-        timeout = self.history_timeout
+        timeout = history_timeout
         if timeout == 0:
             return
-        if timeout < self.block_timeout:
-            timeout = self.block_timeout
+        if timeout < block_timeout:
+            timeout = block_timeout
         self.dbcursor.execute(
             """
             DELETE FROM history
@@ -941,18 +990,18 @@ class BreachBlocker(object):
     def sendNotif(self):
         """ send out mail """
 
-        if not self._fw_updated or not self.send_email:
+        if not self._fw_updated or not send_email:
             return
         print("Sending notification email...")
         message = mailer.Message(
-            From=self.email_from,
-            To=re.split("\s{1,}|\n", self.email_to),
+            From=email_from,
+            To=re.split("\s{1,}|\n", email_to),
             Subject="BreachBlocker Notification"
         )
         message.Body = ""
         for ip in self._new_ips:
             message.Body += "Host " + ip + " added to firewall droplist (" + ", ".join(self._ip_violations[ip]) + ")\n"
-        sender = mailer.Mailer(config.get("email", "mailhost"))
+        sender = mailer.Mailer(mailhost)
         try:
             sender.send(message)
         except Exception:
@@ -961,8 +1010,8 @@ class BreachBlocker(object):
     def kill(self):
         """ kill the daemon """
         try:
-            pid = open(self.pid_file, "r").read().strip()
-            os.unlink(self.pid_file)
+            pid = open(pid_file, "r").read().strip()
+            os.unlink(pid_file)
             os.kill(int(pid), 9)
             print("Daemon killed (%s)..." % pid)
         except Exception as e:
@@ -974,7 +1023,7 @@ class BreachBlocker(object):
         self.loadRules()
         self.checkSoftware()
         self.checkLogfiles()
-        self.dbconn = sqlite3.connect(self.dbfile)
+        self.dbconn = sqlite3.connect(dbfile)
         self.dbcursor = self.dbconn.cursor()
         self.clearOldHistory()
         self.scan()
@@ -989,9 +1038,8 @@ class BBCli(BreachBlocker):
     def __init__(self):
         """ init cli interface """
         BreachBlocker.__init__(self)
-        self.write_syslog = False
         self.initDB()
-        self.dbconn = sqlite3.connect(self.dbfile)
+        self.dbconn = sqlite3.connect(dbfile)
         self.dbcursor = self.dbconn.cursor()
     
     def __del__(self):
@@ -1026,14 +1074,14 @@ class BBCli(BreachBlocker):
         if ip not in fw_blocked:
             print("\033[33mIP %s not in firewall.\033[0m" % ip)
         else:
-            if not self.dry_run:
+            if not dry_run:
                 retcode = Firewall().remove(ip)
         if retcode == 0:
             print("\033[32mdone.\033[0m")
         else:
             print("\033[31merror.\033[0m")
         print("Removing %s from database... " % ip, end="")
-        if not self.dry_run:
+        if not dry_run:
             self.dbcursor.execute("DELETE FROM addresses WHERE ip=?", (ip,))
             self.dbconn.commit()
         print("\033[32mdone.\033[0m")
@@ -1045,7 +1093,7 @@ class BBCli(BreachBlocker):
         fw = Firewall()
         for row in self.ip_rows:
             print("Removing %s from firewall... " % row[0], end="", flush=True)
-            if not self.dry_run:
+            if not dry_run:
                 retcode = fw.remove(row[0])
                 if retcode != 0:
                     print("error.", flush=True)
@@ -1134,6 +1182,18 @@ class BBCli(BreachBlocker):
             print("  \033[32mIP %s found\033[0m" % ip)
         else:
             print("  \033[33mIP %s not found\033[0m" % ip)
+    
+    def showHistory(self):
+        print("Block history: ", end="")
+        res = self.dbcursor.execute(
+            "SELECT ip, date FROM history ORDER BY ip ASC"
+        ).fetchall()
+        if len(res) == 0:
+            print("\033[33mNone.\033[0m")
+            return
+        print("")
+        for row in res:
+            print("  {ip} (date)".format(ip=row[0], date=row[1]))
 
 
 class CliLogger(object):
@@ -1152,8 +1212,6 @@ launch
 
 if __name__ == '__main__':
     args = parser.parse_args()
-
-    dry_run = config.getint("global", "dry_run")
 
     if args.no_dryrun:
         dry_run = False
@@ -1181,9 +1239,10 @@ if __name__ == '__main__':
             BBCli().wlist(args.whitelist[0], args.whitelist[1])
         elif args.flush:
             BBCli().flush()
+        elif args.history:
+            BBCli().showHistory()
         
-        elif (args.daemon or config.getint("global", "daemon")) and not args.single:
-            pid_file = config.get("global", "pid_file")
+        elif (args.daemon or daemon) and not args.single:
             if os.path.isfile(pid_file):
                 BreachBlocker().printError("PID file exists. Is there already a process running?")
             
@@ -1197,7 +1256,7 @@ if __name__ == '__main__':
             print("Daemon started...")
             
             sys.stdout = open(os.devnull, "a")
-            if config.getint("global", "write_syslog"):
+            if write_syslog:
                 syslog.openlog(str("Breachblocker"))
                 syslog.syslog(syslog.LOG_NOTICE, "Starting scan for violations (daemon mode)...")
             
@@ -1206,12 +1265,12 @@ if __name__ == '__main__':
                     script = BreachBlocker()
                     script.run()
                     del script
-                    time.sleep(20)
+                    time.sleep(scan_interval)
                 except Exception as e:
                     syslog.syslog(syslog.LOG_NOTICE, "Exception captured: %s. Continue..." % str(e))
         
         else:
-            if config.getint("global", "write_syslog"):
+            if write_syslog:
                 syslog.openlog(str("Breachblocker"))
                 syslog.syslog(syslog.LOG_NOTICE, "Starting scan for violations...")
             BreachBlocker().run()
