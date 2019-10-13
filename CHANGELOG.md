@@ -1,3 +1,8 @@
+## 2.6.1
+
+* fix: threading deadlock with lines > 400
+* changed: scanning lines raised to 1000
+
 ## 2.6.0
 
 * changed: code formatting and cleanup with pylint
