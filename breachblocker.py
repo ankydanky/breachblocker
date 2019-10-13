@@ -6,15 +6,14 @@ import re
 import socket
 import syslog
 import sqlite3
-import tempfile
 import datetime
 import time
 import subprocess
-import signal
 import traceback
 import argparse
 import getpass
 import configparser
+import threading
 
 from collections import defaultdict
 
@@ -40,8 +39,8 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.5.0"
-__modified__ = "2019-10-05"
+__version__ = "2.6.0"
+__modified__ = "2019-10-13"
 
 """---------------------------
 check python version before running
@@ -166,22 +165,62 @@ add cli arguments
 ---------------------------"""
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--kill", help="Kill runniing process (only in daemon mode)", action="store_true")
-parser.add_argument("--single", help="Run this script once if daemon mode is set to yes", action="store_true")
-parser.add_argument("--daemon", help="Launch as background daemon", action="store_true")
-parser.add_argument("--remove", help="Specify an ip address to remove from firewall", metavar="IPv4-ADDR")
-parser.add_argument("--check", help="Specify an ip address to check in white-/blacklist/firewall", metavar="IPv4-ADDR")
+parser.add_argument(
+    "--kill",
+    help="Kill runniing process (only in daemon mode)",
+    action="store_true"
+)
+parser.add_argument(
+    "--single",
+    help="Run this script once if daemon mode is set to yes",
+    action="store_true"
+)
+parser.add_argument(
+    "--daemon",
+    help="Launch as background daemon",
+    action="store_true"
+)
+parser.add_argument(
+    "--remove",
+    help="Specify an ip address to remove from firewall",
+    metavar="IPv4-ADDR"
+)
+parser.add_argument(
+    "--check",
+    help="Specify an ip address to check in white-/blacklist/firewall",
+    metavar="IPv4-ADDR"
+)
 parser.add_argument(
     "--whitelist",
     help="Specify an ip address to whitelist temporary (minutes)",
     nargs=2,
     metavar=("MIN", "IPv4-ADDR")
 )
-parser.add_argument("--bl", help="List all blocked ip addresses during scans", action="store_true")
-parser.add_argument("--wl", help="List all temporary whitelisted addresses", action="store_true")
-parser.add_argument("--flush", help="Clear all database/firewall adresses", action="store_true")
-parser.add_argument("--no-dryrun", help="Overwrite config setting for DRY-RUN", action="store_true")
-parser.add_argument("--history", help="Show history entries", action="store_true")
+parser.add_argument(
+    "--bl",
+    help="List all blocked ip addresses during scans",
+    action="store_true"
+)
+parser.add_argument(
+    "--wl",
+    help="List all temporary whitelisted addresses",
+    action="store_true"
+)
+parser.add_argument(
+    "--flush",
+    help="Clear all database/firewall adresses",
+    action="store_true"
+)
+parser.add_argument(
+    "--no-dryrun",
+    help="Overwrite config setting for DRY-RUN",
+    action="store_true"
+)
+parser.add_argument(
+    "--history",
+    help="Show history entries",
+    action="store_true"
+)
 
 
 class Firewall(object):
@@ -369,6 +408,240 @@ class Firewall(object):
         return False
 
 
+class ScanThreadBase(threading.Thread):
+    """ base class for scanning threads """
+
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.log = None
+        self.log_pattern = None
+        self.ip_pattern = None
+        self.ip_list = None
+        self.blk_reason = None
+        self.line_numbers = 400
+
+    def checkLogTimeout(self, line):
+        """ check log entry line timeout """
+
+        if line == "":
+            return False
+
+        now_in_secs = int(time.time())
+        ignore_timeout = 3600
+        block_timeout_scope = block_timeout * 60
+
+        if block_timeout_scope < ignore_timeout:
+            ignore_timeout = block_timeout_scope
+        
+        line_arr = re.split("\s{1,}", line)
+        (month_name, day, time_) = line_arr[0:3]
+        year = datetime.datetime.now().strftime("%Y")
+        
+        timeout_date = datetime.datetime.strptime("%s %s %s %s" % (year, month_name, day, time_), "%Y %b %d %H:%M:%S")
+        timeout_date_tuple = timeout_date.timetuple()
+        timeout_in_sec = int(time.mktime(timeout_date_tuple))
+        
+        if now_in_secs - timeout_in_sec <= ignore_timeout:
+            return True
+        
+        return False
+
+
+class ScanThreadSSH(ScanThreadBase):
+    """ scan thread for SSH """
+
+    def __init__(self):
+        ScanThreadBase.__init__(self)
+    
+    def run(self):
+        ssh_comm = "cat {logfile} | grep -i sshd | grep -i -E \"{pattern}\" | tail -n {lines}".format(
+            logfile=self.log,
+            pattern=self.log_pattern,
+            lines=self.line_numbers
+        )
+        proc = subprocess.Popen(
+            ssh_comm,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        proc.wait()
+        stdout = proc.communicate()[0]
+        if IS_PY3:
+            stdout = stdout.decode()
+        shell_ret = stdout.rstrip().split("\n")
+        for i in shell_ret:
+            if not self.checkLogTimeout(i):
+                continue
+            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            if match:
+                match = match.group()
+                if "=" in match:
+                    ip = match.rstrip().split("=")[1]
+                elif "from " in match:
+                    ip = match.replace("from ", "")
+                self.ip_list.append(ip)
+                self.blk_reason['ssh'].append(ip)
+
+
+class ScanThreadMail(ScanThreadBase):
+    """ scan thread for mail """
+
+    def __init__(self):
+        ScanThreadBase.__init__(self)
+    
+    def run(self):
+        mail_comm = "cat {log} | "
+        mail_comm += "grep -i -E \"(imap|pop3)\" | "
+        mail_comm += "grep -E -v \"user=<>\" | "
+        mail_comm += "grep -i -E \"{pattern}\" | "
+        mail_comm += "tail -n {lines}"
+        mail_comm = mail_comm.format(
+            log=self.log,
+            pattern=self.log_pattern,
+            lines=self.line_numbers
+        )
+        proc = subprocess.Popen(
+            mail_comm,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        proc.wait()
+        stdout = proc.communicate()[0]
+        if IS_PY3:
+            stdout = stdout.decode()
+        shell_ret = stdout.rstrip().split("\n")
+        for i in shell_ret:
+            if not self.checkLogTimeout(i):
+                continue
+            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            if match:
+                match = match.group()
+                ip = match.rstrip().split("=")
+                self.ip_list.append(ip[1])
+                self.blk_reason['mail'].append(ip[1])
+
+
+class ScanThreadSMTP(ScanThreadBase):
+    """ scan thread for smtp """
+
+    def __init__(self):
+        ScanThreadBase.__init__(self)
+    
+    def run(self):
+        smtp_comm = "cat {log} | "
+        smtp_comm += "grep -i -E \"(smtp|sasl)\" | "
+        smtp_comm += "grep -i -E -v \"Connection lost\" | "
+        smtp_comm += "grep -i -E \"{pattern}\" | "
+        smtp_comm += "tail -n {lines}"
+        smtp_comm = smtp_comm.format(
+            log=self.log,
+            pattern=self.log_pattern,
+            lines=self.line_numbers
+        )
+        proc = subprocess.Popen(
+            smtp_comm,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        proc.wait()
+        stdout = proc.communicate()[0]
+        if IS_PY3:
+            stdout = stdout.decode()
+        shell_ret = stdout.rstrip().split("\n")
+        for i in shell_ret:
+            if not self.checkLogTimeout(i):
+                continue
+            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            if match:
+                match = match.group()
+                if smtp_svr == "postfix":
+                    ip = re.sub("(\[|\])", "", match)
+                else:
+                    ip = match.rstrip().split("=")[1]
+                self.ip_list.append(ip)
+                self.blk_reason['smtp'].append(ip)
+
+
+class ScanThreadFTP(ScanThreadBase):
+    """ scan thread for ftp """
+
+    def __init__(self):
+        ScanThreadBase.__init__(self)
+    
+    def run(self):
+        ftp_comm = "cat {log} | grep -i ftpd | grep -i -E \"{pattern}\" | tail -n {lines}"
+        ftp_comm = ftp_comm.format(
+            log=self.log,
+            pattern=self.log_pattern,
+            lines=self.line_numbers
+        )
+        proc = subprocess.Popen(
+            ftp_comm,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        proc.wait()
+        stdout = proc.communicate()[0]
+        if IS_PY3:
+            stdout = stdout.decode()
+        shell_ret = stdout.rstrip().split("\n")
+        for i in shell_ret:
+            if not self.checkLogTimeout(i):
+                continue
+            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            if match:
+                match = match.group()
+                if ftp_svr == "proftpd":
+                    ip = re.sub("(::ffff:|\[|\])", "", match)
+                elif ftp_svr == "vsftpd":
+                    ip = match.rstrip().split("=")
+                    ip = ip[1]
+                elif ftp_svr == "pure-ftpd":
+                    ip = re.sub("\?@", "", match)
+                self.ip_list.append(ip)
+                self.blk_reason['ftp'].append(ip)
+
+
+class ScanThreadHTTP(ScanThreadBase):
+    """ scan thread for http """
+
+    def __init__(self):
+        ScanThreadBase.__init__(self)
+    
+    def run(self):
+        http_comm = "cat {log} | grep -i -E \"{pattern}\" | tail -n {lines}"
+        http_comm = http_comm.format(
+            log=self.log,
+            pattern=self.log_pattern,
+            lines=self.line_numbers
+        )
+        proc = subprocess.Popen(
+            http_comm,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        proc.wait()
+        stdout = proc.communicate()[0]
+        if IS_PY3:
+            stdout = stdout.decode()
+        shell_ret = stdout.rstrip().split("\n")
+        for i in shell_ret:
+            if not self.checkLogTimeout(i):
+                continue
+            if "favicon" not in shell_ret:
+                match = re.search(self.ip_pattern, i, re.IGNORECASE)
+                if match:
+                    match = match.group()
+                    ip = match.lstrip("client ")
+                    self.ip_list.append(ip)
+                    self.blk_reason['http'].append(ip)
+
+
 class BreachBlocker(object):
     """ Breachblocker main class """
 
@@ -397,6 +670,8 @@ class BreachBlocker(object):
         self.mode = None
         self.rules = None
 
+        self._ips_to_block = None
+        self._blk_cause = None
         self._blk_reason = {
             "ssh": [],
             "ftp": [],
@@ -486,7 +761,7 @@ class BreachBlocker(object):
             if os.path.isfile(entry):
                 return True
         return False
-    
+
     def checkSoftware(self):
         """ check for invalid defined servers """
 
@@ -558,7 +833,7 @@ class BreachBlocker(object):
                 "log_pattern": self.rules['ssh']['regex_fail'],
                 "ip_pattern": self.rules['ssh']['regex_host']
             }
-    
+
     def checkLogfiles(self):
         """ check if the specified log files do exist """
         
@@ -581,161 +856,69 @@ class BreachBlocker(object):
         if self.smtp_svr_data and scan_smtp:
             if not os.path.isfile(self.smtp_svr_data['log']):
                 self.printError("SMTP log file " + self.smtp_svr_data['log'] + " not found")
-    
-    def _checkLogTimeout(self, line):
-        """ check log entry line timeout """
 
-        if line == "":
-            return False
-
-        now_in_secs = int(time.time())
-        ignore_timeout = 3600
-        block_timeout = config.getint("global", "block_timeout") * 60
-
-        if block_timeout < ignore_timeout:
-            ignore_timeout = block_timeout
-        
-        line_arr = re.split("\s{1,}", line)
-        (month_name, day, time_) = line_arr[0:3]
-        year = datetime.datetime.now().strftime("%Y")
-        
-        timeout_date = datetime.datetime.strptime("%s %s %s %s" % (year, month_name, day, time_), "%Y %b %d %H:%M:%S")
-        timeout_date_tuple = timeout_date.timetuple()
-        timeout_in_sec = int(time.mktime(timeout_date_tuple))
-        
-        if now_in_secs - timeout_in_sec <= ignore_timeout:
-            return True
-        
-        return False
-    
     def scan(self):
         """ do the hard work, scan files for intruders """
 
         print("Scanning for IPs to block... ", end="", flush=True)
         
-        now_in_secs = int(time.time())
-        line_numbers = 100
         ip_list = []
         
         self._ips_to_block = []
         self._blk_cause = self._blk_reason
+
+        ssh_thread = ScanThreadSSH()
+        mail_thread = ScanThreadMail()
+        smtp_thread = ScanThreadSMTP()
+        ftp_thread = ScanThreadFTP()
+        http_thread = ScanThreadHTTP()
         
         if self.ssh_svr_data and scan_ssh:
-            ssh_comm = "cat %s | grep -i sshd | grep -i -E \"%s\" | tail -n %s" % (
-                self.ssh_svr_data['log'], self.ssh_svr_data['log_pattern'], line_numbers
-            )
-            proc = subprocess.Popen(ssh_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-            (stdout, stderr) = proc.communicate()
-            if IS_PY3:
-                stdout = stdout.decode()
-            shell_ret = stdout.rstrip().split("\n")
-            for i in shell_ret:
-                if not self._checkLogTimeout(i):
-                    continue
-                match = re.search(self.ssh_svr_data['ip_pattern'], i, re.IGNORECASE)
-                if match:
-                    match = match.group()
-                    if "=" in match:
-                        ip = match.rstrip().split("=")[1]
-                    elif "from " in match:
-                        ip = match.replace("from ", "")
-                    ip_list.append(ip)
-                    self._blk_reason['ssh'].append(ip)
+            ssh_thread.log = self.ssh_svr_data['log']
+            ssh_thread.log_pattern = self.ssh_svr_data['log_pattern']
+            ssh_thread.ip_pattern = self.ssh_svr_data['ip_pattern']
+            ssh_thread.blk_reason = self._blk_reason
+            ssh_thread.ip_list = ip_list
+            ssh_thread.start()
         
         if self.mail_svr_data and scan_mail:
-            mail_comm = "cat %s | " % self.mail_svr_data['log']
-            mail_comm += "grep -i -E \"(imap|pop3)\" | "
-            mail_comm += "grep -E -v \"user=<>\" | "
-            mail_comm += "grep -i -E \"%s\" | " % self.mail_svr_data['log_pattern']
-            mail_comm += "tail -n %s" % line_numbers
-            proc = subprocess.Popen(mail_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-            (stdout, stderr) = proc.communicate()
-            if IS_PY3:
-                stdout = stdout.decode()
-            shell_ret = stdout.rstrip().split("\n")
-            for i in shell_ret:
-                if not self._checkLogTimeout(i):
-                    continue
-                match = re.search(self.mail_svr_data['ip_pattern'], i, re.IGNORECASE)
-                if match:
-                    match = match.group()
-                    ip = match.rstrip().split("=")
-                    ip_list.append(ip[1])
-                    self._blk_reason['mail'].append(ip[1])
+            mail_thread.log = self.mail_svr_data['log']
+            mail_thread.log_pattern = self.mail_svr_data['log_pattern']
+            mail_thread.ip_pattern = self.mail_svr_data['ip_pattern']
+            mail_thread.blk_reason = self._blk_reason
+            mail_thread.ip_list = ip_list
+            mail_thread.start()
         
         if self.smtp_svr_data and scan_smtp:
-            smtp_comm = "cat %s | " % self.smtp_svr_data['log']
-            smtp_comm += "grep -i -E \"(smtp|sasl)\" | "
-            smtp_comm += "grep -i -E -v \"Connection lost\" | "
-            smtp_comm += "grep -i -E \"%s\" | " % self.smtp_svr_data['log_pattern']
-            smtp_comm += "tail -n %s" % line_numbers
-            proc = subprocess.Popen(smtp_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-            (stdout, stderr) = proc.communicate()
-            if IS_PY3:
-                stdout = stdout.decode()
-            shell_ret = stdout.rstrip().split("\n")
-            for i in shell_ret:
-                if not self._checkLogTimeout(i):
-                    continue
-                match = re.search(self.smtp_svr_data['ip_pattern'], i, re.IGNORECASE)
-                if match:
-                    match = match.group()
-                    if smtp_svr == "postfix":
-                        ip = re.sub("(\[|\])", "", match)
-                    else:
-                        ip = match.rstrip().split("=")[1]
-                    ip_list.append(ip)
-                    self._blk_reason['smtp'].append(ip)
+            smtp_thread.log = self.smtp_svr_data['log']
+            smtp_thread.log_pattern = self.smtp_svr_data['log_pattern']
+            smtp_thread.ip_pattern = self.smtp_svr_data['ip_pattern']
+            smtp_thread.blk_reason = self._blk_reason
+            smtp_thread.ip_list = ip_list
+            smtp_thread.start()
         
         if self.ftp_svr_data and scan_ftp:
-            ftp_comm = "cat %s | grep -i ftpd | grep -i -E \"%s\" | tail -n %s" % (
-                self.ftp_svr_data['log'], self.ftp_svr_data['log_pattern'], line_numbers
-            )
-            proc = subprocess.Popen(ftp_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-            (stdout, stderr) = proc.communicate()
-            if IS_PY3:
-                stdout = stdout.decode()
-            shell_ret = stdout.rstrip().split("\n")
-            for i in shell_ret:
-                if not self._checkLogTimeout(i):
-                    continue
-                match = re.search(self.ftp_svr_data['ip_pattern'], i, re.IGNORECASE)
-                if match:
-                    match = match.group()
-                    if ftp_svr == "proftpd":
-                        ip = re.sub("(::ffff:|\[|\])", "", match)
-                    elif ftp_svr == "vsftpd":
-                        ip = match.rstrip().split("=")
-                        ip = ip[1]
-                    elif ftp_svr == "pure-ftpd":
-                        ip = re.sub("\?@", "", match)
-                    ip_list.append(ip)
-                    self._blk_reason['ftp'].append(ip)
+            ftp_thread.log = self.ftp_svr_data['log']
+            ftp_thread.log_pattern = self.ftp_svr_data['log_pattern']
+            ftp_thread.ip_pattern = self.ftp_svr_data['ip_pattern']
+            ftp_thread.blk_reason = self._blk_reason
+            ftp_thread.ip_list = ip_list
+            ftp_thread.start()
         
         if self.http_svr_data and scan_http:
-            http_comm = "cat %s | grep -i -E \"%s\" | tail -n %s" % (
-                self.http_svr_data['log'], self.http_svr_data['log_pattern'], line_numbers
-            )
-            proc = subprocess.Popen(http_comm, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            proc.wait()
-            (stdout, stderr) = proc.communicate()
-            if IS_PY3:
-                stdout = stdout.decode()
-            shell_ret = stdout.rstrip().split("\n")
-            for i in shell_ret:
-                if not self._checkLogTimeout(i):
-                    continue
-                if "favicon" not in shell_ret:
-                    match = re.search(self.http_svr_data['ip_pattern'], i, re.IGNORECASE)
-                    if match:
-                        match = match.group()
-                        ip = match.lstrip("client ")
-                        ip_list.append(ip)
-                        self._blk_reason['http'].append(ip)
+            http_thread.log = self.http_svr_data['log']
+            http_thread.log_pattern = self.http_svr_data['log_pattern']
+            http_thread.ip_pattern = self.http_svr_data['ip_pattern']
+            http_thread.blk_reason = self._blk_reason
+            http_thread.ip_list = ip_list
+            http_thread.start()
+        
+        while (ssh_thread.is_alive() or
+                mail_thread.is_alive() or
+                smtp_thread.is_alive() or
+                ftp_thread.is_alive() or
+                http_thread.is_alive()):
+            time.sleep(0.1)
         
         unique_ip_counts = defaultdict(int)
         for x in ip_list:
