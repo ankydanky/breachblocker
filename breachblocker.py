@@ -39,7 +39,7 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.6.0"
+__version__ = "2.6.1"
 __modified__ = "2019-10-13"
 
 """---------------------------
@@ -418,11 +418,11 @@ class ScanThreadBase(threading.Thread):
         self.ip_pattern = None
         self.ip_list = None
         self.blk_reason = None
-        self.line_numbers = 400
+        self.line_numbers = 1000
 
     def checkLogTimeout(self, line):
         """ check log entry line timeout """
-
+        
         if line == "":
             return False
 
@@ -465,15 +465,14 @@ class ScanThreadSSH(ScanThreadBase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        proc.wait()
         stdout = proc.communicate()[0]
         if IS_PY3:
             stdout = stdout.decode()
         shell_ret = stdout.rstrip().split("\n")
-        for i in shell_ret:
-            if not self.checkLogTimeout(i):
+        for line in shell_ret:
+            if not self.checkLogTimeout(line):
                 continue
-            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            match = re.search(self.ip_pattern, line, re.IGNORECASE)
             if match:
                 match = match.group()
                 if "=" in match:
@@ -507,15 +506,14 @@ class ScanThreadMail(ScanThreadBase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        proc.wait()
         stdout = proc.communicate()[0]
         if IS_PY3:
             stdout = stdout.decode()
         shell_ret = stdout.rstrip().split("\n")
-        for i in shell_ret:
-            if not self.checkLogTimeout(i):
+        for line in shell_ret:
+            if not self.checkLogTimeout(line):
                 continue
-            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            match = re.search(self.ip_pattern, line, re.IGNORECASE)
             if match:
                 match = match.group()
                 ip = match.rstrip().split("=")
@@ -546,15 +544,14 @@ class ScanThreadSMTP(ScanThreadBase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        proc.wait()
         stdout = proc.communicate()[0]
         if IS_PY3:
             stdout = stdout.decode()
         shell_ret = stdout.rstrip().split("\n")
-        for i in shell_ret:
-            if not self.checkLogTimeout(i):
+        for line in shell_ret:
+            if not self.checkLogTimeout(line):
                 continue
-            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            match = re.search(self.ip_pattern, line, re.IGNORECASE)
             if match:
                 match = match.group()
                 if smtp_svr == "postfix":
@@ -584,15 +581,14 @@ class ScanThreadFTP(ScanThreadBase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        proc.wait()
         stdout = proc.communicate()[0]
         if IS_PY3:
             stdout = stdout.decode()
         shell_ret = stdout.rstrip().split("\n")
-        for i in shell_ret:
-            if not self.checkLogTimeout(i):
+        for line in shell_ret:
+            if not self.checkLogTimeout(line):
                 continue
-            match = re.search(self.ip_pattern, i, re.IGNORECASE)
+            match = re.search(self.ip_pattern, line, re.IGNORECASE)
             if match:
                 match = match.group()
                 if ftp_svr == "proftpd":
@@ -625,16 +621,15 @@ class ScanThreadHTTP(ScanThreadBase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        proc.wait()
         stdout = proc.communicate()[0]
         if IS_PY3:
             stdout = stdout.decode()
         shell_ret = stdout.rstrip().split("\n")
-        for i in shell_ret:
-            if not self.checkLogTimeout(i):
+        for line in shell_ret:
+            if not self.checkLogTimeout(line):
                 continue
             if "favicon" not in shell_ret:
-                match = re.search(self.ip_pattern, i, re.IGNORECASE)
+                match = re.search(self.ip_pattern, line, re.IGNORECASE)
                 if match:
                     match = match.group()
                     ip = match.lstrip("client ")
