@@ -1,3 +1,9 @@
+## 2.6.0
+
+* changed: code formatting and cleanup with pylint
+* changed: scans are now done in threads
+* changed: amount of scanned lines
+
 ## 2.5.0
 
 * added: config option "scan_interval" in deamon mode
