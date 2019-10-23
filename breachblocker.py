@@ -39,8 +39,8 @@ Written by Andy Kayl <andy@ndk.sytes.net>, August 2013
 """
 
 __author__ = "Andy Kayl"
-__version__ = "2.6.1"
-__modified__ = "2019-10-13"
+__version__ = "2.7.0"
+__modified__ = "2019-10-23"
 
 """---------------------------
 check python version before running
@@ -88,6 +88,7 @@ scan_ssh = 0
 scan_ftp = 0
 scan_mail = 0
 scan_smtp = 0
+scan_synrecv = 0
 
 send_email = 0
 mailhost = "127.0.0.1"
@@ -132,6 +133,8 @@ if config.has_option("scan", "mail"):
     scan_mail = config.getint("scan", "mail")
 if config.has_option("scan", "smtp"):
     scan_smtp = config.getint("scan", "smtp")
+if config.has_option("scan", "synrecv"):
+    scan_synrecv = config.getint("scan", "synrecv")
 
 http_svr = config.get("servers", "http")
 ftp_svr = config.get("servers", "ftp")
@@ -637,6 +640,36 @@ class ScanThreadHTTP(ScanThreadBase):
                     self.blk_reason['http'].append(ip)
 
 
+class ScanThreadDoS(ScanThreadBase):
+    """ scan thread for syn_recv connections """
+
+    def __init__(self):
+        ScanThreadBase.__init__(self)
+    
+    def run(self):
+        netstat_comm = "netstat -n | grep tcp | grep SYN_RECV | tail -n {lines}"
+        netstat_comm = netstat_comm.format(lines=self.line_numbers)
+        proc = subprocess.Popen(
+            netstat_comm,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout = proc.communicate()[0]
+        if IS_PY3:
+            stdout = stdout.decode()
+        shell_ret = stdout.rstrip().split("\n")
+        for line in shell_ret:
+            line_list = re.split("\s+", line)
+            if len(line_list) <= 1:
+                return
+            match = re.search("^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", line_list[4], re.IGNORECASE)
+            if match:
+                ip = match.group()
+                self.ip_list.append(ip)
+                self.blk_reason['synflood'].append(ip)
+
+
 class BreachBlocker(object):
     """ Breachblocker main class """
 
@@ -674,6 +707,7 @@ class BreachBlocker(object):
             "smtp": [],
             "http": [],
             "blacklist": [],
+            "synflood": []
         }
         self._fw_updated = False
     
@@ -867,6 +901,7 @@ class BreachBlocker(object):
         smtp_thread = ScanThreadSMTP()
         ftp_thread = ScanThreadFTP()
         http_thread = ScanThreadHTTP()
+        synrecv_thread = ScanThreadDoS()
         
         if self.ssh_svr_data and scan_ssh:
             ssh_thread.log = self.ssh_svr_data['log']
@@ -908,11 +943,17 @@ class BreachBlocker(object):
             http_thread.ip_list = ip_list
             http_thread.start()
         
+        if scan_synrecv:
+            synrecv_thread.blk_reason = self._blk_reason
+            synrecv_thread.ip_list = ip_list
+            synrecv_thread.start()
+        
         while (ssh_thread.is_alive() or
                 mail_thread.is_alive() or
                 smtp_thread.is_alive() or
                 ftp_thread.is_alive() or
-                http_thread.is_alive()):
+                http_thread.is_alive() or
+                synrecv_thread.is_alive()):
             time.sleep(0.1)
         
         unique_ip_counts = defaultdict(int)
