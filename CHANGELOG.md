@@ -1,3 +1,7 @@
+## 2.7.0
+
+* added: scan for SYN_RECV connection status (often used by DoS)
+
 ## 2.6.1
 
 * fix: threading deadlock with lines > 400
